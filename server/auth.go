@@ -1,7 +1,9 @@
 package server
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"fmt"
 	"log"
 	"math/big"
@@ -20,6 +22,7 @@ const (
 	jwtKeyFilename = "jwt.key"
 	authPassKey    = "auth.password_hash"
 	jwtTTL         = 7 * 24 * time.Hour
+	authBodyLimit  = 16 << 10
 	keyChars       = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
 	// 下限与 setup 页的前端校验一致——校验只放在前端等于没放，直接打 API 就能
@@ -103,6 +106,39 @@ func verifyJWT(tokenStr string, key []byte) bool {
 	return err == nil && t.Valid
 }
 
+// Bind sessions to the persisted password hash. Password change/reset therefore
+// revokes old sessions atomically with the credential write, including on restart.
+func credentialSigningKey(key []byte, passwordHash string) []byte {
+	if passwordHash == "" {
+		return key // pre-initialization/test fixtures have no issued admin session
+	}
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte("artex-credential-session-v1\x00"))
+	mac.Write([]byte(passwordHash))
+	return mac.Sum(nil)
+}
+
+func (s *Server) authenticateSession(w http.ResponseWriter, r *http.Request) bool {
+	if extractToken(r) == "" {
+		writeErr(w, 401, "未授权")
+		return false
+	}
+	pg := s.pg(w)
+	if pg == nil {
+		return false
+	}
+	hash, _, err := pg.GetSetting(authPassKey)
+	if err != nil {
+		writeErr(w, 503, errDataSourceUnavailable)
+		return false
+	}
+	if !verifyJWT(extractToken(r), credentialSigningKey(s.jwtKey, hash)) {
+		writeErr(w, 401, "token 无效或已过期")
+		return false
+	}
+	return true
+}
+
 // extractToken reads the JWT from Authorization: Bearer header,
 // artex_token cookie, or ?token= query param (for SSE connections).
 func extractToken(r *http.Request) string {
@@ -120,17 +156,18 @@ func extractToken(r *http.Request) string {
 func (s *Server) requireAuth(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
+		if strings.HasPrefix(p, "/api/auth/") {
+			if r.ContentLength > authBodyLimit {
+				writeErr(w, http.StatusRequestEntityTooLarge, "认证请求过大")
+				return
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, authBodyLimit)
+		}
 		if strings.HasPrefix(p, "/api/auth/") || p == "/api/health" {
 			h.ServeHTTP(w, r)
 			return
 		}
-		tok := extractToken(r)
-		if tok == "" {
-			writeErr(w, 401, "未授权")
-			return
-		}
-		if !verifyJWT(tok, s.jwtKey) {
-			writeErr(w, 401, "token 无效或已过期")
+		if !s.authenticateSession(w, r) {
 			return
 		}
 		h.ServeHTTP(w, r)
@@ -197,7 +234,7 @@ func (s *Server) authInit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 403, "密码已设置")
 		return
 	}
-	tok, err := signJWT(s.jwtKey)
+	tok, err := signJWT(credentialSigningKey(s.jwtKey, string(hash)))
 	if err != nil {
 		writeErr(w, 500, "token 生成失败")
 		return
@@ -213,8 +250,7 @@ func (s *Server) authChangePassword(w http.ResponseWriter, r *http.Request) {
 	if pg == nil {
 		return
 	}
-	if !verifyJWT(extractToken(r), s.jwtKey) {
-		writeErr(w, 401, "未授权")
+	if !s.authenticateSession(w, r) {
 		return
 	}
 	var req struct {
@@ -289,7 +325,7 @@ func (s *Server) authLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 401, "用户名或密码错误")
 		return
 	}
-	tok, err := signJWT(s.jwtKey)
+	tok, err := signJWT(credentialSigningKey(s.jwtKey, hash))
 	if err != nil {
 		writeErr(w, 500, "token 生成失败")
 		return
