@@ -89,11 +89,11 @@ cd lynol
 git clone https://github.com/lynolz163/lynol.git
 cd lynol
 cp .env.example .env          # 填 POSTGRES_PASSWORD、可选 ANTHROPIC_API_KEY
-docker compose up -d          # 拉取 autumn27/artex 镜像 + postgres
+docker compose up -d          # 拉取 ghcr.io/lynolz163/lynol 镜像 + postgres
 # → http://localhost:8787
 ```
 
-> 上面的 Git 地址只负责获取源码与 Compose 文件；Compose 默认仍从 Docker Hub 拉取 `autumn27/artex` 镜像。如果镜像源也需要切换到你自己的发布地址，还需要先发布对应镜像，再同步修改 `docker-compose.yml` 中的 `image`。
+> 上面的 Git 地址负责获取源码与 Compose 文件；Compose 默认从 GitHub Container Registry 拉取 `ghcr.io/lynolz163/lynol` 镜像。首次发布后，请确认该 GHCR 包设为公开，否则使用者需要先登录 GHCR。
 
 镜像已含常用工具（ripgrep/curl/vim/npm/nmap…）；`./skills` 与 `./data` 以绑定挂载持久化。
 
