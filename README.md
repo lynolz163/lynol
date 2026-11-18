@@ -65,12 +65,14 @@ AI 自主渗透测试系统（Go 后端 + Next.js 前端）
 ## 安装
 
 > 依赖数据库 **PostgreSQL**；探索需配置 **LLM**（`ANTHROPIC_API_KEY` 或 `OPENAI_API_KEY`，也可在 UI 里配）。
+>
+> 本仓库源码地址：<https://github.com/lynolz163/lynol>。
 
 ### 方式一：一键安装脚本（推荐）
 
 ```bash
-git clone https://github.com/Hinln/ARTEX.git
-cd ARTEX
+git clone https://github.com/lynolz163/lynol.git
+cd lynol
 ./install.sh
 ```
 
@@ -84,12 +86,14 @@ cd ARTEX
 ### 方式二：Docker Compose（手动）
 
 ```bash
-git clone https://github.com/Hinln/ARTEX.git
-cd ARTEX
+git clone https://github.com/lynolz163/lynol.git
+cd lynol
 cp .env.example .env          # 填 POSTGRES_PASSWORD、可选 ANTHROPIC_API_KEY
 docker compose up -d          # 拉取 autumn27/artex 镜像 + postgres
 # → http://localhost:8787
 ```
+
+> 上面的 Git 地址只负责获取源码与 Compose 文件；Compose 默认仍从 Docker Hub 拉取 `autumn27/artex` 镜像。如果镜像源也需要切换到你自己的发布地址，还需要先发布对应镜像，再同步修改 `docker-compose.yml` 中的 `image`。
 
 镜像已含常用工具（ripgrep/curl/vim/npm/nmap…）；`./skills` 与 `./data` 以绑定挂载持久化。
 
@@ -175,7 +179,7 @@ ARTEX_TARGETS=linux/amd64,windows/amd64 ./build.sh --release
 ### 方式二：一键更新脚本
 
 ```bash
-cd ARTEX
+cd lynol
 ./update.sh
 ```
 
@@ -187,7 +191,7 @@ cd ARTEX
 ### 方式三：Docker Compose（手动）
 
 ```bash
-cd ARTEX
+cd lynol
 git pull                       # 更新 compose / 脚本（可选）
 # 指定版本：在 .env 设 ARTEX_TAG=v0.2.0；不设则用 latest
 docker compose pull artex
