@@ -1845,6 +1845,20 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
 
   // ── exploration ──
   if (path === "/exploration/frontier") return D.frontier;
+  if (path === "/exploration/findings/milestones" && m === "POST") {
+    if (!Array.isArray(b.finding_ids) || b.finding_ids.length === 0) throw new Error("请提供要记录的漏洞");
+    if (b.milestone !== "dispatched" && b.milestone !== "developer_fixed") throw new Error("无效的漏洞处置节点");
+    const field = b.milestone === "dispatched" ? "dispatched_at" : "developer_fixed_at";
+    const ids = new Set(b.finding_ids);
+    const at = new Date().toISOString();
+    const recorded: Record<string, string> = {};
+    for (const finding of mockFindings) {
+      if (!ids.has(finding.id) || finding[field]) continue;
+      finding[field] = at;
+      recorded[finding.id] = at;
+    }
+    return { recorded, skipped: ids.size - Object.keys(recorded).length };
+  }
   if (path === "/exploration/findings/stats") {
     const vulnclasses = Array.from(new Set(mockFindings.map((f) => f.vulnclass))).sort();
     // 「按任务」下拉:有漏洞的任务 + 描述 + 条数(mock 任务 id 是字符串,直接当 id 用)。
@@ -2073,10 +2087,17 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     // 列表:GET /traffic
     return mockTrafficSummary(findingID);
   }
-  // 单条 finding:GET 详情 / PATCH 改状态/严重度/名称/类别(demo 直接改内存对象)。
-  if (seg[0] === "exploration" && seg[1] === "findings" && seg.length === 3 && seg[2] !== "stats") {
+  // 单条 finding 的详情、编辑与处置时间（demo 内存态）。
+  if (
+    seg[0] === "exploration" &&
+    seg[1] === "findings" &&
+    (seg.length === 3 || (seg.length === 4 && seg[3] === "milestones" && m === "POST"))
+  ) {
     const f = mockFindings.find((x) => x.id === seg[2]);
-    if (!f) return {};
+    if (!f) {
+      if (seg[3] === "milestones") throw new Error("漏洞不存在");
+      return {};
+    }
     if (m === "PATCH") {
       if (typeof b.status === "string") f.status = b.status as typeof f.status;
       if (typeof b.severity === "string") f.severity = b.severity as typeof f.severity;
@@ -2091,9 +2112,30 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
       f.task_id !== contextTask.id &&
       contextTask.source_task_ids?.includes(f.task_id)
     );
+    if (seg[3] === "milestones") {
+      if (contextTaskId && (!contextTask || (!inherited && f.task_id !== contextTask.id))) {
+        throw new Error("漏洞不在当前任务中");
+      }
+      if (inherited) throw new Error("继承漏洞只读，请在来源任务中修改");
+      if (b.milestone === "dispatched") return { recorded_at: (f.dispatched_at ??= new Date().toISOString()) };
+      if (b.milestone === "developer_fixed") {
+        return { recorded_at: (f.developer_fixed_at ??= new Date().toISOString()) };
+      }
+      throw new Error("无效的漏洞处置节点");
+    }
+    const findingID = D.findings.findIndex((item) => item.id === f.id) + 1;
+    const retests = mockRetests.filter((item) => item.finding_id === findingID);
+    const latestRetest = retests[0];
+    const reopened = retests.find((item) => item.status === "completed" && item.verdict === "reproduced");
+    const verified = retests.reverse().find(
+      (item) =>
+        item.status === "completed" && item.verdict === "fixed" && item.finished_at && item.id > (reopened?.id ?? 0),
+    );
     return {
       ...f,
       finding_id: f.id,
+      retest_requested_at: latestRetest?.created_at,
+      verified_fixed_at: verified?.finished_at ?? undefined,
       traffic_count: mockTrafficCount(f.id),
       ...(inherited ? { inherited: true, source_task_id: f.task_id } : {}),
     };

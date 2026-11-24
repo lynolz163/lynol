@@ -101,7 +101,7 @@ func evidenceError(w http.ResponseWriter, err error) {
 	writeErr(w, status, err.Error())
 }
 
-func (s *Server) findingTrafficAccess(w http.ResponseWriter, r *http.Request, write bool) (int64, bool) {
+func (s *Server) findingAccess(w http.ResponseWriter, r *http.Request, write bool) (int64, bool) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id <= 0 {
 		writeErr(w, 400, "invalid finding id")
@@ -146,7 +146,7 @@ func trafficSummary(in *db.FindingTraffic) *db.FindingTraffic {
 }
 
 func (s *Server) getFindingTraffic(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.findingTrafficAccess(w, r, false)
+	id, ok := s.findingAccess(w, r, false)
 	if !ok {
 		return
 	}
@@ -159,7 +159,7 @@ func (s *Server) getFindingTraffic(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) bindFindingTraffic(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.findingTrafficAccess(w, r, true)
+	id, ok := s.findingAccess(w, r, true)
 	if !ok {
 		return
 	}
@@ -183,7 +183,7 @@ func (s *Server) bindFindingTraffic(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) editFindingTraffic(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.findingTrafficAccess(w, r, true)
+	id, ok := s.findingAccess(w, r, true)
 	if !ok {
 		return
 	}
@@ -282,7 +282,7 @@ func readEvidencePreview(store *evidence.Store, snapshot db.TrafficEvidenceSnaps
 }
 
 func (s *Server) getFindingTrafficDetail(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.findingTrafficAccess(w, r, false)
+	id, ok := s.findingAccess(w, r, false)
 	if !ok {
 		return
 	}
@@ -313,7 +313,7 @@ func (s *Server) getFindingTrafficDetail(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) getFindingTrafficBody(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.findingTrafficAccess(w, r, false)
+	id, ok := s.findingAccess(w, r, false)
 	if !ok {
 		return
 	}

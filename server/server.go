@@ -758,8 +758,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/exploration/findings/asset-tree", s.findingAssetTree)
 	mux.HandleFunc("GET /api/exploration/findings/stats", s.findingStats)
 	mux.HandleFunc("GET /api/exploration/findings/export", s.findingsExport)
+	mux.HandleFunc("POST /api/exploration/findings/milestones", s.recordFindingMilestoneBatch)
 	s.registerFindingTraffic(mux)
 	mux.HandleFunc("GET /api/exploration/findings/{id}", s.getFinding)
+	mux.HandleFunc("POST /api/exploration/findings/{id}/milestones", s.recordFindingMilestone)
 	mux.HandleFunc("GET /api/exploration/findings/{id}/lineage", s.findingLineage)
 	mux.HandleFunc("POST /api/exploration/findings/{id}/deepen", s.deepenFinding)
 	mux.HandleFunc("GET /api/exploration/findings/{id}/retests", s.listFindingRetests)
@@ -2089,6 +2091,76 @@ func (s *Server) getFinding(w http.ResponseWriter, r *http.Request) {
 		dto.Inherited = inherited
 	}
 	writeJSON(w, 200, dto)
+}
+
+func (s *Server) recordFindingMilestone(w http.ResponseWriter, r *http.Request) {
+	pg := s.pg(w)
+	if pg == nil {
+		return
+	}
+	id, ok := s.findingAccess(w, r, true)
+	if !ok {
+		return
+	}
+	var body struct {
+		Milestone string `json:"milestone"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeErr(w, 400, "无效的请求")
+		return
+	}
+	at, err := pg.RecordFindingMilestone(r.Context(), id, body.Milestone)
+	switch {
+	case errors.Is(err, db.ErrInvalidFindingMilestone):
+		writeErr(w, 400, err.Error())
+	case errors.Is(err, db.ErrFindingNotFound):
+		writeErr(w, 404, err.Error())
+	case err != nil:
+		log.Printf("[finding] 记录处置节点失败 finding=%d: %v", id, err)
+		writeErr(w, 500, "记录漏洞处置时间失败")
+	default:
+		writeJSON(w, 200, map[string]time.Time{"recorded_at": at})
+	}
+}
+
+func (s *Server) recordFindingMilestoneBatch(w http.ResponseWriter, r *http.Request) {
+	pg := s.pg(w)
+	if pg == nil {
+		return
+	}
+	var body struct {
+		FindingIDs []string `json:"finding_ids"`
+		Milestone  string   `json:"milestone"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	if err := decode(r, &body); err != nil || len(body.FindingIDs) == 0 {
+		writeErr(w, 400, "请提供要记录的漏洞")
+		return
+	}
+	ids := make([]int64, 0, len(body.FindingIDs))
+	seen := make(map[int64]bool, len(body.FindingIDs))
+	for _, raw := range body.FindingIDs {
+		id, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || id <= 0 {
+			writeErr(w, 400, "无效的漏洞编号")
+			return
+		}
+		if !seen[id] {
+			ids = append(ids, id)
+			seen[id] = true
+		}
+	}
+	recorded, err := pg.RecordFindingMilestoneBatch(r.Context(), ids, body.Milestone)
+	if errors.Is(err, db.ErrInvalidFindingMilestone) {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if err != nil {
+		log.Printf("[finding] 批量记录漏洞处置时间失败: %v", err)
+		writeErr(w, 500, "批量记录漏洞处置时间失败")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"recorded": recorded, "skipped": len(ids) - len(recorded)})
 }
 
 // findingsExport 导出发现页的漏洞。

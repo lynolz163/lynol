@@ -23,7 +23,7 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
 import { statusMeta } from "@/lib/status";
-import type { Finding, FindingStatus, Severity } from "@/lib/types";
+import type { Finding, FindingMilestone, FindingStatus, Severity } from "@/lib/types";
 
 import { FindingLineageView } from "./lineage";
 
@@ -39,6 +39,10 @@ const FINDING_STATUSES: FindingStatus[] = [
   "duplicate",
   "risk_accepted",
 ];
+const MANUAL_MILESTONES = [
+  { action: "dispatched", field: "dispatched_at", label: "漏洞下发时间", button: "记录已下发" },
+  { action: "developer_fixed", field: "developer_fixed_at", label: "开发反馈修复时间", button: "记录开发反馈" },
+] as const;
 
 function fmtTime(ts: string) {
   return new Date(ts).toLocaleString("zh-CN");
@@ -61,6 +65,7 @@ function FindingDetailInner() {
   const [finding, setFinding] = React.useState<Finding | null>(null);
   const [loaded, setLoaded] = React.useState(false);
   const [tab, setTab] = React.useState("overview");
+  const [savingMilestone, setSavingMilestone] = React.useState<FindingMilestone | null>(null);
 
   const load = React.useCallback(() => {
     if (!id) {
@@ -128,6 +133,19 @@ function FindingDetailInner() {
 
   const title = finding.name || finding.vulnclass || "未分类";
 
+  async function recordMilestone(milestone: (typeof MANUAL_MILESTONES)[number]) {
+    setSavingMilestone(milestone.action);
+    try {
+      const { recorded_at } = await api.recordFindingMilestone(id, milestone.action, contextTaskId || undefined);
+      setFinding((cur) => (cur?.id === id ? { ...cur, [milestone.field]: recorded_at } : cur));
+      toast.success(`${milestone.label}已记录`);
+    } catch (e) {
+      toast.error(`记录失败：${(e as Error).message}`);
+    } finally {
+      setSavingMilestone(null);
+    }
+  }
+
   return (
     <Tabs value={tab} onValueChange={setTab} className="flex flex-1 flex-col gap-0">
       {/* Sticky header */}
@@ -172,7 +190,13 @@ function FindingDetailInner() {
                   <p className="text-sm leading-relaxed whitespace-pre-wrap">{finding.summary || "（无摘要）"}</p>
                 </CardContent>
               </Card>
-              <FindingRetestPanel key={id} findingId={id} readOnly={finding.inherited} onCompleted={load} />
+              <FindingRetestPanel
+                key={`retest:${id}`}
+                findingId={id}
+                readOnly={finding.inherited}
+                onStarted={load}
+                onCompleted={load}
+              />
               <Card>
                 <CardHeader>
                   <CardTitle className="text-sm">证据 / PoC</CardTitle>
@@ -188,7 +212,7 @@ function FindingDetailInner() {
                 </CardContent>
               </Card>
               <FindingTrafficPanel
-                key={id}
+                key={`traffic:${id}`}
                 findingId={id}
                 contextTask={contextTaskId || undefined}
                 readOnly={finding.inherited}
@@ -319,6 +343,47 @@ function FindingDetailInner() {
                 {/* 发现时间 */}
                 <FieldRow label="发现时间">
                   <span className="tabular-nums">{fmtTime(finding.ts)}</span>
+                </FieldRow>
+                {MANUAL_MILESTONES.map((milestone) => {
+                  const ts = finding[milestone.field];
+                  return (
+                    <FieldRow key={milestone.action} label={milestone.label}>
+                      {ts ? (
+                        <time className="tabular-nums" dateTime={ts}>
+                          {fmtTime(ts)}
+                        </time>
+                      ) : finding.inherited ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={savingMilestone !== null}
+                          onClick={() => void recordMilestone(milestone)}
+                        >
+                          {savingMilestone === milestone.action ? "记录中…" : milestone.button}
+                        </Button>
+                      )}
+                    </FieldRow>
+                  );
+                })}
+                <FieldRow label="最近发起复测">
+                  {finding.retest_requested_at ? (
+                    <time className="tabular-nums" dateTime={finding.retest_requested_at}>
+                      {fmtTime(finding.retest_requested_at)}
+                    </time>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </FieldRow>
+                <FieldRow label="验证确认修复时间">
+                  {finding.verified_fixed_at ? (
+                    <time className="tabular-nums" dateTime={finding.verified_fixed_at}>
+                      {fmtTime(finding.verified_fixed_at)}
+                    </time>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
                 </FieldRow>
               </CardContent>
             </Card>

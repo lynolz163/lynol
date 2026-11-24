@@ -468,6 +468,7 @@ export interface TaskConstraint {
 
 // ---- Findings ----
 export type Severity = "critical" | "high" | "medium" | "low";
+export type FindingMilestone = "dispatched" | "developer_fixed";
 
 // 漏洞处置状态:待处理 / 处理中 / 已确认 / 已处理 / 已修复 / 误报 / 忽略 / 重复 / 风险接受。
 export type FindingStatus =
@@ -510,6 +511,10 @@ export interface Finding {
   inherited?: boolean;
   assets?: FindingAsset[];
   ts: string;
+  dispatched_at?: string;
+  developer_fixed_at?: string;
+  retest_requested_at?: string;
+  verified_fixed_at?: string;
 }
 
 // FindingsPage 是发现列表的服务端分页响应。

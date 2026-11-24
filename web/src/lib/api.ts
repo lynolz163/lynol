@@ -39,6 +39,7 @@ import type {
   FindingAssetTree,
   FindingDeepenResponse,
   FindingGroupsPage,
+  FindingMilestone,
   FindingQuery,
   FindingRetest,
   FindingStats,
@@ -593,6 +594,16 @@ export const api = {
     get<Finding>(
       `/exploration/findings/${id}${contextTaskId ? `?context_task=${encodeURIComponent(contextTaskId)}` : ""}`,
     ),
+  recordFindingMilestone: (id: string, milestone: FindingMilestone, contextTaskId?: string) =>
+    post<{ recorded_at: string }>(
+      `/exploration/findings/${id}/milestones${contextTaskId ? `?context_task=${encodeURIComponent(contextTaskId)}` : ""}`,
+      { milestone },
+    ),
+  recordFindingMilestoneBatch: (findingIds: string[], milestone: FindingMilestone) =>
+    post<{ recorded: Record<string, string>; skipped: number }>("/exploration/findings/milestones", {
+      finding_ids: findingIds,
+      milestone,
+    }),
   findingTraffic: (id: string, contextTask?: string) =>
     get<FindingTraffic>(
       `/exploration/findings/${id}/traffic${contextTask ? `?context_task=${encodeURIComponent(contextTask)}` : ""}`,

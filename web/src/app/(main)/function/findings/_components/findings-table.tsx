@@ -213,7 +213,19 @@ export function FindingsTable({
                       <span className="truncate font-medium">{f.name || f.vulnclass || "未分类"}</span>
                     )}
                     <span className="truncate text-xs text-muted-foreground">{f.summary}</span>
-                    <Badge variant="outline">流量证据 {f.traffic_count ?? 0} 条</Badge>
+                    <div className="flex flex-wrap gap-1">
+                      <Badge variant="outline">流量证据 {f.traffic_count ?? 0} 条</Badge>
+                      {f.dispatched_at && (
+                        <Badge variant="secondary" title={new Date(f.dispatched_at).toLocaleString("zh-CN")}>
+                          已下发
+                        </Badge>
+                      )}
+                      {f.developer_fixed_at && (
+                        <Badge variant="secondary" title={new Date(f.developer_fixed_at).toLocaleString("zh-CN")}>
+                          开发已反馈
+                        </Badge>
+                      )}
+                    </div>
                   </div>
                 </TableCell>
                 <TableCell>

@@ -34,6 +34,11 @@ type DBFinding struct {
 	Report          string // 详细报告(Markdown);仅 GetFinding 填充,列表查询不带
 	CreatedAt       time.Time
 	TaskDescription string // populated via LEFT JOIN on tasks
+
+	DispatchedAt      *time.Time
+	DeveloperFixedAt  *time.Time
+	RetestRequestedAt *time.Time
+	VerifiedFixedAt   *time.Time
 }
 
 // Finding triage states (findings.status).
@@ -105,7 +110,7 @@ func (d *DB) AddFinding(taskID, nodeID int64, vulnclass, name, severity, summary
 const findingSelectCols = `f.id, f.task_id, f.node_id, f.vulnclass, COALESCE(f.name, ''), f.severity, f.summary,
 	       f.evidence, f.worker, f.asset_ids, COALESCE(f.status, 'pending'), f.created_at,
 	       COALESCE(t.description, '') AS task_description, f.evidence_version, f.report_evidence_version,
- (SELECT count(*) FROM finding_traffic_bindings b WHERE b.finding_id=f.id)`
+ (SELECT count(*) FROM finding_traffic_bindings b WHERE b.finding_id=f.id), f.dispatched_at, f.developer_fixed_at`
 
 // scanFindings materializes rows selected via findingSelectCols.
 func scanFindings(rows interface {
@@ -118,7 +123,9 @@ func scanFindings(rows interface {
 		f := &DBFinding{}
 		var aidsJSON string
 		if err := rows.Scan(&f.ID, &f.TaskID, &f.NodeID, &f.VulnClass, &f.Name, &f.Severity,
-			&f.Summary, &f.Evidence, &f.Worker, &aidsJSON, &f.Status, &f.CreatedAt, &f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.TrafficCount); err != nil {
+			&f.Summary, &f.Evidence, &f.Worker, &aidsJSON, &f.Status, &f.CreatedAt,
+			&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.TrafficCount,
+			&f.DispatchedAt, &f.DeveloperFixedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(aidsJSON), &f.AssetIDs)
@@ -511,7 +518,8 @@ func (d *DB) ListFindingsForExport(f FindingFilter, ids []int64) ([]*DBFinding, 
 		var aidsJSON string
 		if err := rows.Scan(&f.ID, &f.TaskID, &f.NodeID, &f.VulnClass, &f.Name, &f.Severity,
 			&f.Summary, &f.Evidence, &f.Worker, &aidsJSON, &f.Status, &f.CreatedAt,
-			&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.TrafficCount, &f.Report); err != nil {
+			&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.TrafficCount,
+			&f.DispatchedAt, &f.DeveloperFixedAt, &f.Report); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(aidsJSON), &f.AssetIDs)
@@ -628,18 +636,28 @@ func (d *DB) FindingStats() (*FindingStats, error) {
 }
 
 // GetFinding returns a single finding row (with task_description joined and the
-// full Markdown report), or nil when no row has that id. Unlike the list queries
-// it also selects `report` — that column is only needed on the detail page.
+// report and lifecycle milestones), or nil when no row has that id.
 func (d *DB) GetFinding(id int64) (*DBFinding, error) {
 	f := &DBFinding{}
 	var aidsJSON string
-	err := d.QueryRow(`SELECT `+findingSelectCols+`, COALESCE(f.report, '')
+	// A later reproduction invalidates the previous fix. Repeated successful
+	// checks keep the first confirmation after that reproduction.
+	err := d.QueryRow(`SELECT `+findingSelectCols+`, COALESCE(f.report, ''),
+		(SELECT r.created_at FROM finding_retests r
+		 WHERE r.finding_id=f.id ORDER BY r.id DESC LIMIT 1),
+		(SELECT r.finished_at FROM finding_retests r
+		 WHERE r.finding_id=f.id AND r.status='completed' AND r.verdict='fixed'
+		   AND r.finished_at IS NOT NULL
+		   AND r.id > COALESCE((SELECT max(p.id) FROM finding_retests p
+		       WHERE p.finding_id=f.id AND p.status='completed' AND p.verdict='reproduced'), 0)
+		 ORDER BY r.id LIMIT 1)
 		FROM findings f
 		LEFT JOIN tasks t ON f.task_id = t.id
 		WHERE f.id = $1`, id).Scan(
 		&f.ID, &f.TaskID, &f.NodeID, &f.VulnClass, &f.Name, &f.Severity,
 		&f.Summary, &f.Evidence, &f.Worker, &aidsJSON, &f.Status, &f.CreatedAt,
-		&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.TrafficCount, &f.Report)
+		&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.TrafficCount,
+		&f.DispatchedAt, &f.DeveloperFixedAt, &f.Report, &f.RetestRequestedAt, &f.VerifiedFixedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -648,6 +666,58 @@ func (d *DB) GetFinding(id int64) (*DBFinding, error) {
 	}
 	_ = json.Unmarshal([]byte(aidsJSON), &f.AssetIDs)
 	return f, nil
+}
+
+var ErrInvalidFindingMilestone = errors.New("无效的漏洞处置节点")
+
+func findingMilestoneColumn(milestone string) (string, error) {
+	switch milestone {
+	case "dispatched":
+		return "dispatched_at", nil
+	case "developer_fixed":
+		return "developer_fixed_at", nil
+	default:
+		return "", ErrInvalidFindingMilestone
+	}
+}
+
+// RecordFindingMilestone keeps the first server timestamp for each manual action.
+func (d *DB) RecordFindingMilestone(ctx context.Context, id int64, milestone string) (time.Time, error) {
+	column, err := findingMilestoneColumn(milestone)
+	if err != nil {
+		return time.Time{}, err
+	}
+	var at time.Time
+	err = d.QueryRowContext(ctx, `UPDATE findings SET `+column+`=COALESCE(`+column+`, now())
+		WHERE id=$1 RETURNING `+column, id).Scan(&at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, ErrFindingNotFound
+	}
+	return at, err
+}
+
+// RecordFindingMilestoneBatch sets one timestamp for the IDs missing this milestone.
+func (d *DB) RecordFindingMilestoneBatch(ctx context.Context, ids []int64, milestone string) (map[string]time.Time, error) {
+	column, err := findingMilestoneColumn(milestone)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := d.QueryContext(ctx, `UPDATE findings SET `+column+`=now()
+		WHERE id=ANY($1::bigint[]) AND `+column+` IS NULL RETURNING id, `+column, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	recorded := make(map[string]time.Time)
+	for rows.Next() {
+		var id int64
+		var at time.Time
+		if err := rows.Scan(&id, &at); err != nil {
+			return nil, err
+		}
+		recorded[strconv.FormatInt(id, 10)] = at
+	}
+	return recorded, rows.Err()
 }
 
 // DeleteFinding removes a finding entirely: the standalone findings row and its

@@ -35,11 +35,13 @@ export function FindingRetestPanel({
   findingId,
   findingName,
   readOnly = false,
+  onStarted,
   onCompleted,
 }: {
   findingId: string;
   findingName?: string;
   readOnly?: boolean;
+  onStarted?: () => void;
   onCompleted?: () => void;
 }) {
   const [items, setItems] = React.useState<FindingRetest[] | null>(null);
@@ -134,8 +136,13 @@ export function FindingRetestPanel({
                       : statusLabels[item.status]}
                   </Badge>
                   <span className="text-muted-foreground text-xs">
-                    #{item.id} · {new Date(item.created_at).toLocaleString("zh-CN")}
+                    #{item.id} · 发起于 {new Date(item.created_at).toLocaleString("zh-CN")}
                   </span>
+                  {item.finished_at ? (
+                    <time className="text-muted-foreground text-xs" dateTime={item.finished_at}>
+                      结束于 {new Date(item.finished_at).toLocaleString("zh-CN")}
+                    </time>
+                  ) : null}
                   {item.conversation_id != null ? (
                     <Button asChild variant="ghost" size="sm" className="ml-auto">
                       <Link href={`/chat?c=${item.conversation_id}`}>查看会话</Link>
@@ -178,6 +185,7 @@ export function FindingRetestPanel({
             previousItems.current = rows;
             setItems(rows);
             setError("");
+            onStarted?.();
             void load();
           }}
         />

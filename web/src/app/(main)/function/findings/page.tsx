@@ -11,7 +11,9 @@ import {
   ClockIcon,
   DownloadIcon,
   InfoIcon,
+  MessageSquareCheckIcon,
   SearchIcon,
+  SendIcon,
   ShieldAlertIcon,
   TriangleAlertIcon,
 } from "lucide-react";
@@ -46,6 +48,7 @@ import type {
   Finding,
   FindingAssetNode,
   FindingGroup,
+  FindingMilestone,
   FindingStats,
   FindingStatus,
   Severity,
@@ -66,6 +69,25 @@ import {
 } from "./_components/findings-table";
 
 const FINDING_LIST_PREFERENCE_KEY = "artex_finding_list_preferences";
+
+const BATCH_MILESTONES = [
+  {
+    kind: "dispatched",
+    field: "dispatched_at",
+    button: "批量记录下发",
+    timeLabel: "下发时间",
+    existing: "已下发",
+    icon: SendIcon,
+  },
+  {
+    kind: "developer_fixed",
+    field: "developer_fixed_at",
+    button: "批量反馈已修复",
+    timeLabel: "开发反馈修复时间",
+    existing: "已有开发反馈",
+    icon: MessageSquareCheckIcon,
+  },
+] as const;
 
 // 列表视图:flat = 跨任务平铺大表(默认);grouped = 按任务分组折叠;
 // asset = 左侧资产树 + 右侧该子树下的发现。
@@ -246,8 +268,9 @@ export default function FindingsPage() {
     });
   }, []);
 
-  // 勾选导出:按 finding_id(独立表 id)记选中项,跨页保留。
+  // 批量操作按 finding_id 记选中项，跨页保留。
   const [selectedIds, setSelectedIds] = React.useState<Set<string>>(() => new Set());
+  const [recordingMilestone, setRecordingMilestone] = React.useState<FindingMilestone | null>(null);
   // 导出弹窗状态:范围(当前筛选/全部/选中) × 格式(md 单文件/md 分文件 zip/csv/json)。
   const [exportOpen, setExportOpen] = React.useState(false);
   const [exportScope, setExportScope] = React.useState<"filtered" | "all" | "selected">("filtered");
@@ -273,6 +296,34 @@ export default function FindingsPage() {
       return next;
     });
   }, []);
+
+  async function recordSelectedMilestone(action: (typeof BATCH_MILESTONES)[number]) {
+    const ids = new Set(selectedIds);
+    if (recordingMilestone || ids.size === 0) return;
+    setRecordingMilestone(action.kind);
+    try {
+      const { recorded, skipped } = await api.recordFindingMilestoneBatch([...ids], action.kind);
+      setFindings((items) =>
+        items.map((item) => {
+          const at = item.finding_id ? recorded[item.finding_id] : undefined;
+          return at ? { ...item, [action.field]: at } : item;
+        }),
+      );
+      setSelectedIds((current) => new Set([...current].filter((id) => !ids.has(id))));
+      const count = Object.keys(recorded).length;
+      if (count) {
+        toast.success(`已记录 ${count} 条${action.timeLabel}`, {
+          description: skipped ? `跳过 ${skipped} 条${action.existing}或已不存在的漏洞。` : undefined,
+        });
+      } else {
+        toast.info(`所选漏洞均${action.existing}或已不存在`);
+      }
+    } catch (e) {
+      toast.error(`记录${action.timeLabel}失败：${(e as Error).message}`);
+    } finally {
+      setRecordingMilestone(null);
+    }
+  }
 
   // 打开导出弹窗时,若有勾选项则默认范围切到「选中」,否则「当前筛选」。
   function openExport() {
@@ -949,10 +1000,25 @@ export default function FindingsPage() {
             </SelectContent>
           </Select>
 
-          <div className="ml-auto flex items-center gap-3">
+          <div className="ml-auto flex flex-wrap items-center gap-3">
             {selectedIds.size > 0 && (
               <span className="text-xs text-muted-foreground tabular-nums">已选 {selectedIds.size} 条</span>
             )}
+            {BATCH_MILESTONES.map((action) => {
+              const active = recordingMilestone === action.kind;
+              return (
+                <Button
+                  key={action.kind}
+                  size="sm"
+                  variant="outline"
+                  disabled={selectedIds.size === 0 || recordingMilestone !== null}
+                  onClick={() => void recordSelectedMilestone(action)}
+                >
+                  {active ? <Spinner data-icon="inline-start" /> : <action.icon data-icon="inline-start" />}
+                  {active ? "记录中…" : action.button}
+                </Button>
+              );
+            })}
             <Button size="sm" variant="outline" onClick={openExport}>
               <DownloadIcon /> 导出
             </Button>
