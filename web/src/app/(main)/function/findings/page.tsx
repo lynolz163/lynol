@@ -19,6 +19,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { FindingMilestoneDialog } from "@/components/finding-milestone-dialog";
+import { FindingResponsibilityDialog } from "@/components/finding-responsibility-dialog";
 import { FindingRetestDialog } from "@/components/finding-retest-dialog";
 import { StatusBadge } from "@/components/status-badge";
 import { TablePagination } from "@/components/table-pagination";
@@ -151,6 +153,24 @@ const EMPTY_STATS: FindingStats = {
 };
 
 export default function FindingsPage() {
+  const [responsibilityScope, setResponsibilityScope] = React.useState({
+    business_line: "",
+    assignee: "",
+    active_only: false,
+  });
+  const [responsibilityOptions, setResponsibilityOptions] = React.useState({
+    business_lines: [] as string[],
+    assignees: [] as string[],
+  });
+  React.useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    setResponsibilityScope({
+      business_line: q.get("business_line") ?? "",
+      assignee: q.get("assignee") ?? "",
+      active_only: q.get("active_only") === "true",
+    });
+    api.findingResponsibilityOptions().then(setResponsibilityOptions, () => toast.error("读取归属筛选失败"));
+  }, []);
   const [view, setView] = React.useState<FindingView>("flat");
   const [severity, setSeverity] = React.useState<"all" | Severity>("all");
   const [status, setStatus] = React.useState<"all" | FindingStatus>("all");
@@ -184,7 +204,7 @@ export default function FindingsPage() {
   const retestRefreshVersion = React.useRef(0);
   const [deepenDescription, setDeepenDescription] = React.useState("");
   const [deepening, setDeepening] = React.useState(false);
-  const filterFingerprint = JSON.stringify([severity, status, vulnclass, task, sort, query]);
+  const filterFingerprint = JSON.stringify([severity, status, vulnclass, task, sort, query, responsibilityScope]);
   const activeFilterFingerprint = React.useRef(filterFingerprint);
   activeFilterFingerprint.current = filterFingerprint;
 
@@ -271,6 +291,7 @@ export default function FindingsPage() {
   // 批量操作按 finding_id 记选中项，跨页保留。
   const [selectedIds, setSelectedIds] = React.useState<Set<string>>(() => new Set());
   const [recordingMilestone, setRecordingMilestone] = React.useState<FindingMilestone | null>(null);
+  const [selectedMilestone, setSelectedMilestone] = React.useState<(typeof BATCH_MILESTONES)[number] | null>(null);
   // 导出弹窗状态:范围(当前筛选/全部/选中) × 格式(md 单文件/md 分文件 zip/csv/json)。
   const [exportOpen, setExportOpen] = React.useState(false);
   const [exportScope, setExportScope] = React.useState<"filtered" | "all" | "selected">("filtered");
@@ -297,12 +318,12 @@ export default function FindingsPage() {
     });
   }, []);
 
-  async function recordSelectedMilestone(action: (typeof BATCH_MILESTONES)[number]) {
+  async function recordSelectedMilestone(action: (typeof BATCH_MILESTONES)[number], recordedAt?: string) {
     const ids = new Set(selectedIds);
     if (recordingMilestone || ids.size === 0) return;
     setRecordingMilestone(action.kind);
     try {
-      const { recorded, skipped } = await api.recordFindingMilestoneBatch([...ids], action.kind);
+      const { recorded, skipped } = await api.recordFindingMilestoneBatch([...ids], action.kind, recordedAt);
       setFindings((items) =>
         items.map((item) => {
           const at = item.finding_id ? recorded[item.finding_id] : undefined;
@@ -318,8 +339,6 @@ export default function FindingsPage() {
       } else {
         toast.info(`所选漏洞均${action.existing}或已不存在`);
       }
-    } catch (e) {
-      toast.error(`记录${action.timeLabel}失败：${(e as Error).message}`);
     } finally {
       setRecordingMilestone(null);
     }
@@ -337,7 +356,7 @@ export default function FindingsPage() {
       await api.exportFindings({
         format: exportFormat,
         scope: exportScope,
-        filters: { severity, status, vulnclass, task, query, sort },
+        filters: { severity, status, vulnclass, task, query, sort, ...responsibilityScope },
         ids: [...selectedIds],
       });
       setExportOpen(false);
@@ -373,6 +392,7 @@ export default function FindingsPage() {
     setFlat((current) => ({ ...current, loading: true }));
     try {
       const result = await api.findingsPage({
+        ...responsibilityScope,
         page: flatPage,
         pageSize: flatPageSize,
         severity,
@@ -390,7 +410,19 @@ export default function FindingsPage() {
       // Polling keeps the last successful snapshot visible.
       setFlat((current) => ({ ...current, loading: false }));
     }
-  }, [activeAssetScope, filterFingerprint, flatPage, flatPageSize, severity, status, vulnclass, task, query, sort]);
+  }, [
+    responsibilityScope,
+    activeAssetScope,
+    filterFingerprint,
+    flatPage,
+    flatPageSize,
+    severity,
+    status,
+    vulnclass,
+    task,
+    query,
+    sort,
+  ]);
 
   // loadAssetTree 取整棵资产树。树不随选中节点变化(否则选一下就塌成一条链),
   // 所以这里不带 assetScope。
@@ -400,7 +432,15 @@ export default function FindingsPage() {
     const request = ++assetTreeRequest.current;
     setAssetTree((current) => ({ ...current, loading: true }));
     try {
-      const result = await api.findingAssetTree({ severity, status, vulnclass, task, query, sort });
+      const result = await api.findingAssetTree({
+        severity,
+        status,
+        vulnclass,
+        task,
+        query,
+        sort,
+        ...responsibilityScope,
+      });
       if (request !== assetTreeRequest.current || activeFilterFingerprint.current !== requestFilter) return;
       setAssetTree({
         nodes: result.nodes ?? [],
@@ -415,7 +455,7 @@ export default function FindingsPage() {
       setAssetTree((current) => ({ ...current, loading: false }));
       toast.error(`资产树加载失败：${(e as Error).message}`);
     }
-  }, [filterFingerprint, severity, status, vulnclass, task, query, sort]);
+  }, [responsibilityScope, filterFingerprint, severity, status, vulnclass, task, query, sort]);
 
   const refreshGroups = React.useCallback(async () => {
     const requestFilter = filterFingerprint;
@@ -423,6 +463,7 @@ export default function FindingsPage() {
     const request = ++groupsRequest.current;
     try {
       const result = await api.findingGroups({
+        ...responsibilityScope,
         page,
         pageSize,
         severity,
@@ -439,7 +480,7 @@ export default function FindingsPage() {
     } catch {
       // Polling keeps the last successful snapshot visible.
     }
-  }, [filterFingerprint, page, pageSize, severity, status, vulnclass, task, query, sort]);
+  }, [responsibilityScope, filterFingerprint, page, pageSize, severity, status, vulnclass, task, query, sort]);
 
   const loadGroup = React.useCallback(
     async (key: string, groupPage: number, groupPageSize: number) => {
@@ -460,6 +501,7 @@ export default function FindingsPage() {
       }));
       try {
         const result = await api.findingsPage({
+          ...responsibilityScope,
           page: groupPage,
           pageSize: groupPageSize,
           severity,
@@ -498,7 +540,7 @@ export default function FindingsPage() {
         }));
       }
     },
-    [filterFingerprint, severity, status, vulnclass, query, sort],
+    [responsibilityScope, filterFingerprint, severity, status, vulnclass, query, sort],
   );
 
   React.useEffect(() => {
@@ -867,10 +909,21 @@ export default function FindingsPage() {
 
   return (
     <div className="flex flex-1 flex-col gap-4 md:gap-6">
+      {selectedMilestone && (
+        <FindingMilestoneDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setSelectedMilestone(null);
+          }}
+          title={selectedMilestone.button}
+          description={`将为所选 ${selectedIds.size} 个漏洞填写同一时间。本轮已有记录会跳过，时间顺序不正确时整批不保存。`}
+          onSave={(at) => recordSelectedMilestone(selectedMilestone, at)}
+        />
+      )}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">发现</h1>
-          <p className="text-muted-foreground text-sm">跨任务漏洞汇总</p>
+          <h1 className="font-semibold text-xl tracking-tight">发现</h1>
+          <p className="text-muted-foreground text-sm">跨任务漏洞汇总 · 顶部数字为全局统计</p>
         </div>
         <Tabs value={view} onValueChange={(v) => setView(v as FindingView)}>
           <TabsList>
@@ -935,7 +988,42 @@ export default function FindingsPage() {
             ))}
           </ToggleGroup>
 
-          <Select value={status} onValueChange={(v) => setStatus(v as "all" | FindingStatus)}>
+          {(["business_line", "assignee"] as const).map((key) => (
+            <Select
+              key={key}
+              value={responsibilityScope[key] || "__all__"}
+              onValueChange={(v) => setResponsibilityScope({ ...responsibilityScope, [key]: v === "__all__" ? "" : v })}
+            >
+              <SelectTrigger className="w-36" aria-label={key === "business_line" ? "业务线筛选" : "负责人筛选"}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all__">{key === "business_line" ? "全部业务线" : "全部负责人"}</SelectItem>
+                <SelectItem value="__none__">{key === "business_line" ? "业务线未归属" : "负责人未指派"}</SelectItem>
+                {responsibilityOptions[key === "business_line" ? "business_lines" : "assignees"].map((name) => (
+                  <SelectItem key={name} value={name}>
+                    {name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ))}
+          <Button
+            size="sm"
+            variant={responsibilityScope.active_only ? "secondary" : "outline"}
+            onClick={() =>
+              setResponsibilityScope({ ...responsibilityScope, active_only: !responsibilityScope.active_only })
+            }
+          >
+            仅待处置{responsibilityScope.active_only ? " ✓" : ""}
+          </Button>
+          <Select
+            value={status}
+            onValueChange={(v) => {
+              setStatus(v as "all" | FindingStatus);
+              setResponsibilityScope({ ...responsibilityScope, active_only: false });
+            }}
+          >
             <SelectTrigger size="sm" className="w-32">
               <SelectValue placeholder="状态" />
             </SelectTrigger>
@@ -1002,8 +1090,28 @@ export default function FindingsPage() {
 
           <div className="ml-auto flex flex-wrap items-center gap-3">
             {selectedIds.size > 0 && (
-              <span className="text-xs text-muted-foreground tabular-nums">已选 {selectedIds.size} 条</span>
+              <span className="text-muted-foreground text-xs tabular-nums">已选 {selectedIds.size} 条</span>
             )}
+            <FindingResponsibilityDialog
+              label="批量分配归属"
+              ids={[...selectedIds]}
+              disabled={recordingMilestone !== null}
+              onSaved={(business_line, assignee, updated) => {
+                const ids = new Set(updated);
+                setFindings((items) =>
+                  items.map((item) =>
+                    ids.has(item.finding_id ?? item.id) ? { ...item, business_line, assignee } : item,
+                  ),
+                );
+                setSelectedIds((current) => new Set([...current].filter((id) => !ids.has(id))));
+                void loadFlat();
+                if (view === "grouped") {
+                  void refreshGroups();
+                  setGroupFindings({});
+                }
+                if (view === "asset") void loadAssetTree();
+              }}
+            />
             {BATCH_MILESTONES.map((action) => {
               const active = recordingMilestone === action.kind;
               return (
@@ -1012,7 +1120,7 @@ export default function FindingsPage() {
                   size="sm"
                   variant="outline"
                   disabled={selectedIds.size === 0 || recordingMilestone !== null}
-                  onClick={() => void recordSelectedMilestone(action)}
+                  onClick={() => setSelectedMilestone(action)}
                 >
                   {active ? <Spinner data-icon="inline-start" /> : <action.icon data-icon="inline-start" />}
                   {active ? "记录中…" : action.button}
@@ -1050,7 +1158,7 @@ export default function FindingsPage() {
               </CardContent>
             </Card>
             <div className="flex min-w-0 flex-col gap-2">
-              <div className="flex min-w-0 flex-wrap items-center gap-1 text-sm text-muted-foreground">
+              <div className="flex min-w-0 flex-wrap items-center gap-1 text-muted-foreground text-sm">
                 <button
                   type="button"
                   className={cn("hover:text-foreground", assetScope === null && "font-medium text-foreground")}
@@ -1114,9 +1222,7 @@ export default function FindingsPage() {
                           <CardTitle className="truncate text-sm">
                             {group.task_id === null
                               ? "未关联 / 任务已删除"
-                              : group.task_name
-                                ? `${group.task_name}（任务 #${group.task_id}）`
-                                : `任务 #${group.task_id}`}
+                              : `${group.task_name ? `${group.task_name} · ` : ""}任务 #${group.task_id}`}
                           </CardTitle>
                           <CardDescription className="truncate" title={group.task_description}>
                             {group.task_description || "来源任务不可用"}
@@ -1131,11 +1237,11 @@ export default function FindingsPage() {
                           return (
                             <span key={level} className="inline-flex items-center gap-1">
                               <StatusBadge domain="severity" value={level} dot />
-                              <span className="text-xs tabular-nums text-muted-foreground">{count}</span>
+                              <span className="text-muted-foreground text-xs tabular-nums">{count}</span>
                             </span>
                           );
                         })}
-                        <span className="text-xs tabular-nums text-muted-foreground">
+                        <span className="text-muted-foreground text-xs tabular-nums">
                           {fmtTime(group.last_found_at)}
                         </span>
                         {group.task_id !== null && (
@@ -1176,7 +1282,7 @@ export default function FindingsPage() {
             })}
             {groups.length === 0 && (
               <Card>
-                <CardContent className="py-12 text-center text-sm text-muted-foreground">没有匹配的发现。</CardContent>
+                <CardContent className="py-12 text-center text-muted-foreground text-sm">没有匹配的发现。</CardContent>
               </Card>
             )}
             <TablePagination
@@ -1276,7 +1382,7 @@ export default function FindingsPage() {
 
           <div className="flex flex-col gap-5 py-1">
             <div className="flex flex-col gap-2">
-              <span className="text-xs text-muted-foreground">导出范围</span>
+              <span className="text-muted-foreground text-xs">导出范围</span>
               <RadioGroup value={exportScope} onValueChange={(v) => setExportScope(v as typeof exportScope)}>
                 <label htmlFor="export-scope-filtered" className="flex items-center gap-2 text-sm">
                   <RadioGroupItem id="export-scope-filtered" value="filtered" /> 导出当前筛选结果（共 {filteredTotal}{" "}
@@ -1296,7 +1402,7 @@ export default function FindingsPage() {
             </div>
 
             <div className="flex flex-col gap-2">
-              <span className="text-xs text-muted-foreground">导出格式</span>
+              <span className="text-muted-foreground text-xs">导出格式</span>
               <RadioGroup value={exportFormat} onValueChange={(v) => setExportFormat(v as typeof exportFormat)}>
                 <label htmlFor="export-format-md-single" className="flex items-center gap-2 text-sm">
                   <RadioGroupItem id="export-format-md-single" value="md-single" /> Markdown 汇总报告（单个 .md 文件）

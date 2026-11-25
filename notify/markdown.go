@@ -71,6 +71,9 @@ func markdownText(s string, maxRunes int) string {
 // telegramEscape。曾经在共享函数里加过 markdown 转义，结果 Telegram 消息里
 // 出现了 `\(1\)` 这种可见的反斜杠。
 func markdownTitle(m Message) string {
+	if m.Report != nil {
+		return m.Report.Title
+	}
 	if m.Batch {
 		return fmt.Sprintf("漏洞汇总 · 共 %d 条", len(m.Items))
 	}
@@ -90,6 +93,17 @@ func markdownTitle(m Message) string {
 //
 // maxBytes<=0 表示不限制。
 func markdownBody(m Message, maxBytes int) (string, int) {
+	if m.Report != nil {
+		var b strings.Builder
+		fmt.Fprintf(&b, "**%s**\n", markdownText(m.Report.Title, 0))
+		for _, line := range m.Report.Lines {
+			b.WriteString("\n" + markdownText(line, 0) + "\n")
+		}
+		if m.HomeURL != "" {
+			fmt.Fprintf(&b, "\n[查看完整报告](%s)\n", m.HomeURL)
+		}
+		return TruncateBytes(b.String(), maxBytes), 1
+	}
 	if !m.Batch {
 		if len(m.Items) == 0 {
 			return "", 0

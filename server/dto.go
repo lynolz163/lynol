@@ -312,6 +312,10 @@ type FindingDTO struct {
 	DeveloperFixedAt      *time.Time                 `json:"developer_fixed_at,omitempty"`
 	RetestRequestedAt     *time.Time                 `json:"retest_requested_at,omitempty"`
 	VerifiedFixedAt       *time.Time                 `json:"verified_fixed_at,omitempty"`
+	BusinessLineID        *int64                     `json:"business_line_id,omitempty"`
+	AssigneeID            *int64                     `json:"assignee_id,omitempty"`
+	BusinessLine          string                     `json:"business_line"`
+	Assignee              string                     `json:"assignee"`
 
 	ID        string `json:"id"`
 	FindingID string `json:"finding_id,omitempty"` // standalone findings-table id — the handle for status updates
@@ -453,6 +457,7 @@ func findingFromDB(f *db.DBFinding, assets map[int64]*db.Asset) FindingDTO {
 		TrafficCount: f.TrafficCount, EvidenceVersion: f.EvidenceVersion, ReportEvidenceVersion: f.ReportEvidenceVersion,
 		ReportStale: f.Report != "" && f.EvidenceVersion != f.ReportEvidenceVersion, TrafficBindings: f.TrafficBindings,
 		DispatchedAt: f.DispatchedAt, DeveloperFixedAt: f.DeveloperFixedAt,
+		BusinessLine: f.BusinessLine, Assignee: f.Assignee, BusinessLineID: f.BusinessLineID, AssigneeID: f.AssigneeID,
 		RetestRequestedAt: f.RetestRequestedAt, VerifiedFixedAt: f.VerifiedFixedAt,
 		VulnClass: f.VulnClass,
 		Name:      f.Name,

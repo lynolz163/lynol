@@ -236,6 +236,9 @@ func (d *DB) FinishFindingRetest(id int64, status, reason string) error {
 	if err != nil {
 		return err
 	}
+	if _, err := tx.Exec(`SELECT set_config('artex.finding_actor','复测 Agent',true)`); err != nil {
+		return err
+	}
 	if finalStatus == "completed" && verdict == "fixed" {
 		// 走带通知的版本，与人工在详情页改状态共用同一套语义。
 		//
@@ -248,6 +251,17 @@ func (d *DB) FinishFindingRetest(id int64, status, reason string) error {
 		// 牵动 server 侧调用点与多处测试，超出本次改动的范围。
 		if _, _, _, _, err := SetFindingStatusTx(context.Background(), tx, findingID, FindingFixed); err != nil {
 			return err
+		}
+	}
+	if finalStatus == "completed" && verdict == "reproduced" {
+		var previous string
+		if err := tx.QueryRow(`SELECT status FROM findings WHERE id=$1`, findingID).Scan(&previous); err != nil {
+			return err
+		}
+		if previous == FindingFixed || previous == FindingResolved {
+			if _, _, _, _, err := SetFindingStatusTx(context.Background(), tx, findingID, FindingConfirmed); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit()

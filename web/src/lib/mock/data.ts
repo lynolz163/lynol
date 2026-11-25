@@ -45,6 +45,8 @@ import type {
   TrafficResp,
 } from "@/lib/types";
 
+import { importedLifecycleFindings, lifecyclePreviewFindings } from "./lifecycle-preview";
+
 const T = (iso: string) => iso; // readability helper for timestamps
 
 // ── Tasks ──────────────────────────────────────────────────────────────────
@@ -811,6 +813,8 @@ export const findings: Finding[] = [
     task_description: "Acme 官网与后台外部渗透",
     ts: T("2026-07-26T00:20:00Z"),
   },
+  ...lifecyclePreviewFindings,
+  ...importedLifecycleFindings,
 ];
 
 // ── Exploration graph (active task) ──────────────────────────────────────────

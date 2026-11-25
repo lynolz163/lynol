@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
@@ -324,8 +325,39 @@ WHERE NOT fanned_out ORDER BY id FOR UPDATE SKIP LOCKED LIMIT $1`, limit)
 		channelID int64
 	}
 	var toInsert []pending
+	eventFindingIDs := make([]int64, 0, len(events))
+	for _, event := range events {
+		eventFindingIDs = append(eventFindingIDs, event.FindingID)
+	}
+	routing := map[int64][]int64{}
+	routeRows, e := tx.QueryContext(ctx, `SELECT f.id,b.channel_ids FROM findings f JOIN business_lines b ON b.id=f.business_line_id WHERE f.id=ANY($1::bigint[])`, eventFindingIDs)
+	if e != nil {
+		return 0, 0, e
+	}
+	for routeRows.Next() {
+		var id int64
+		var raw []byte
+		if e = routeRows.Scan(&id, &raw); e != nil {
+			routeRows.Close()
+			return 0, 0, e
+		}
+		var ids []int64
+		if e = json.Unmarshal(raw, &ids); e != nil {
+			routeRows.Close()
+			return 0, 0, e
+		}
+		routing[id] = ids
+	}
+	e = routeRows.Err()
+	routeRows.Close()
+	if e != nil {
+		return 0, 0, e
+	}
 	for i, snap := range parsedSnaps {
 		for _, ch := range channels {
+			if ids := routing[events[i].FindingID]; len(ids) > 0 && !slices.Contains(ids, ch.ID) {
+				continue
+			}
 			if !notify.Match(notify.ParseFilter(ch.Filter), snap) {
 				continue
 			}

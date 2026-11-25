@@ -29,6 +29,7 @@ func findingPaginationParam(raw string, fallback, upperBound int) int {
 // query string. 列表 / 分组 / 资产树 / 导出走同一份解析,新增筛选项只改这里。
 func findingFilterFromQuery(q url.Values) db.FindingFilter {
 	return db.FindingFilter{
+		BusinessLine: q.Get("business_line"), Assignee: q.Get("assignee"), ActiveOnly: q.Get("active_only") == "true",
 		Severity:  normFilter(q.Get("severity")),
 		Status:    normFilter(q.Get("status")),
 		VulnClass: normFilter(q.Get("vulnclass")),

@@ -490,6 +490,10 @@ export interface FindingAsset {
 }
 
 export interface Finding {
+  business_line_id?: number;
+  assignee_id?: number;
+	 business_line?: string;
+	 assignee?: string;
   traffic_count?: number;
   evidence_version?: number;
   report_evidence_version?: number;
@@ -576,6 +580,9 @@ export interface FindingTaskOption {
 
 // FindingQuery 是发现列表分页/筛选/排序参数。
 export interface FindingQuery {
+  business_line?: string;
+  assignee?: string;
+  active_only?: boolean;
   page: number;
   pageSize: number;
   severity?: "all" | Severity;

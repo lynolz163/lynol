@@ -34,7 +34,12 @@ func htmlTitle(m Message) string {
 func htmlBody(m Message, maxRunes int) string {
 	var b strings.Builder
 	b.WriteString(`<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;font-size:14px;color:#262626;line-height:1.6;">`)
-	if m.Batch {
+	if m.Report != nil {
+		fmt.Fprintf(&b, "<h2>%s</h2>", htmlEscape(m.Report.Title))
+		for _, line := range m.Report.Lines {
+			fmt.Fprintf(&b, "<p>%s</p>", htmlEscape(line))
+		}
+	} else if m.Batch {
 		b.WriteString(htmlBatchIntro(m))
 		for _, it := range m.Items {
 			b.WriteString(htmlItem(it, false))

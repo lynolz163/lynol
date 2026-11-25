@@ -129,7 +129,7 @@ func (d *DB) ClaimRealtimeDeliveries(ctx context.Context, channelID int64, limit
 		sql: `SELECT dd.id FROM notification_deliveries dd
 JOIN notification_channels c ON c.id = dd.channel_id
 WHERE dd.channel_id = $1 AND dd.state IN ($2,$3) AND dd.next_attempt_at <= now()
-  AND c.enabled AND c.mode = $4
+  AND c.enabled AND (c.mode = $4 OR EXISTS (SELECT 1 FROM notification_events e WHERE e.id=dd.event_id AND e.kind='governance_report'))
 ORDER BY dd.next_attempt_at, dd.id
 FOR UPDATE OF dd SKIP LOCKED
 LIMIT $5`,
@@ -152,6 +152,7 @@ func (d *DB) DigestBatchDue(ctx context.Context, channelID int64, minAge time.Du
   SELECT 1 FROM notification_deliveries d
   JOIN notification_channels c ON c.id = d.channel_id
   WHERE d.channel_id = $1 AND d.state IN ($2,$3) AND c.enabled
+    AND NOT EXISTS (SELECT 1 FROM notification_events e WHERE e.id=d.event_id AND e.kind='governance_report')
   GROUP BY d.channel_id
   HAVING min(d.created_at) <= now() - make_interval(secs => $4)
 )`, channelID, NotifyStatePending, NotifyStateSending, int64(minAge.Seconds())).Scan(&due)
@@ -187,6 +188,7 @@ func (d *DB) ClaimDigestBatch(ctx context.Context, channelID int64, limit int, l
 		sql: `SELECT dd.id FROM notification_deliveries dd
 JOIN notification_channels c ON c.id = dd.channel_id
 WHERE dd.channel_id = $1 AND dd.state IN ($2,$3) AND dd.next_attempt_at <= now() AND c.enabled
+  AND NOT EXISTS (SELECT 1 FROM notification_events e WHERE e.id=dd.event_id AND e.kind='governance_report')
 ORDER BY dd.id
 FOR UPDATE OF dd SKIP LOCKED
 LIMIT $4`,

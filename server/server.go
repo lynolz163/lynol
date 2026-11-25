@@ -231,6 +231,8 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		// 漏洞 IM 推送投递引擎。与 Scheduler 并列但独立：推送的实时性要求(3s)
 		// 与触发器的业务节奏不同，且两者失败互不牵连——推送卡住不该影响 agent 触发。
 		go newNotifier(s).Run(s.ctx)
+		go s.runFindingMetrics(s.ctx)
+		go s.runFindingReports(s.ctx)
 		// Fill the tool cache for any enabled MCP that has none yet (notably the
 		// seeded browser MCP on first run). Async so it never blocks startup.
 		go s.discoverEmptyMCPsOnStartup()
@@ -757,10 +759,24 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/exploration/findings/groups", s.findingGroups)
 	mux.HandleFunc("GET /api/exploration/findings/asset-tree", s.findingAssetTree)
 	mux.HandleFunc("GET /api/exploration/findings/stats", s.findingStats)
+	mux.HandleFunc("GET /api/exploration/findings/metrics", s.findingMetrics)
+	mux.HandleFunc("GET /api/exploration/findings/responsibility-options", s.findingResponsibilityOptions)
+	mux.HandleFunc("GET /api/exploration/responsibility", s.responsibilityDirectory)
+	mux.HandleFunc("PUT /api/exploration/responsibility/{kind}", s.saveResponsibility)
+	mux.HandleFunc("PUT /api/exploration/findings/responsibility", s.setFindingResponsibility)
+	mux.HandleFunc("GET /api/exploration/finding-report-schedules", s.findingReportSchedules)
+	mux.HandleFunc("PUT /api/exploration/finding-report-schedules", s.findingReportSchedules)
+	mux.HandleFunc("GET /api/exploration/finding-reports", s.findingReports)
+	mux.HandleFunc("POST /api/exploration/finding-reports", s.findingReports)
+	mux.HandleFunc("GET /api/exploration/finding-reports/{id}", s.findingReportDetail)
+	mux.HandleFunc("POST /api/exploration/findings/metrics/refresh", s.refreshFindingMetrics)
+	mux.HandleFunc("GET /api/exploration/findings/sla", s.findingSLA)
+	mux.HandleFunc("PUT /api/exploration/findings/sla", s.findingSLA)
 	mux.HandleFunc("GET /api/exploration/findings/export", s.findingsExport)
 	mux.HandleFunc("POST /api/exploration/findings/milestones", s.recordFindingMilestoneBatch)
 	s.registerFindingTraffic(mux)
 	mux.HandleFunc("GET /api/exploration/findings/{id}", s.getFinding)
+	mux.HandleFunc("GET /api/exploration/findings/{id}/history", s.findingHistory)
 	mux.HandleFunc("POST /api/exploration/findings/{id}/milestones", s.recordFindingMilestone)
 	mux.HandleFunc("GET /api/exploration/findings/{id}/lineage", s.findingLineage)
 	mux.HandleFunc("POST /api/exploration/findings/{id}/deepen", s.deepenFinding)
@@ -2103,15 +2119,16 @@ func (s *Server) recordFindingMilestone(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var body struct {
-		Milestone string `json:"milestone"`
+		Milestone  string     `json:"milestone"`
+		RecordedAt *time.Time `json:"recorded_at"`
 	}
 	if err := decode(r, &body); err != nil {
 		writeErr(w, 400, "无效的请求")
 		return
 	}
-	at, err := pg.RecordFindingMilestone(r.Context(), id, body.Milestone)
+	at, err := pg.RecordFindingMilestone(r.Context(), id, body.Milestone, body.RecordedAt)
 	switch {
-	case errors.Is(err, db.ErrInvalidFindingMilestone):
+	case errors.Is(err, db.ErrInvalidFindingMilestone), errors.Is(err, db.ErrInvalidFindingMilestoneTime):
 		writeErr(w, 400, err.Error())
 	case errors.Is(err, db.ErrFindingNotFound):
 		writeErr(w, 404, err.Error())
@@ -2129,8 +2146,9 @@ func (s *Server) recordFindingMilestoneBatch(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var body struct {
-		FindingIDs []string `json:"finding_ids"`
-		Milestone  string   `json:"milestone"`
+		FindingIDs []string   `json:"finding_ids"`
+		Milestone  string     `json:"milestone"`
+		RecordedAt *time.Time `json:"recorded_at"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	if err := decode(r, &body); err != nil || len(body.FindingIDs) == 0 {
@@ -2150,8 +2168,8 @@ func (s *Server) recordFindingMilestoneBatch(w http.ResponseWriter, r *http.Requ
 			seen[id] = true
 		}
 	}
-	recorded, err := pg.RecordFindingMilestoneBatch(r.Context(), ids, body.Milestone)
-	if errors.Is(err, db.ErrInvalidFindingMilestone) {
+	recorded, err := pg.RecordFindingMilestoneBatch(r.Context(), ids, body.Milestone, body.RecordedAt)
+	if errors.Is(err, db.ErrInvalidFindingMilestone) || errors.Is(err, db.ErrInvalidFindingMilestoneTime) {
 		writeErr(w, 400, err.Error())
 		return
 	}

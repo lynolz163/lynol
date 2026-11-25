@@ -20,6 +20,15 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
+//go:embed finding_history.sql
+var findingHistorySQL string
+
+//go:embed finding_reports.sql
+var findingReportsSQL string
+
+//go:embed responsibility.sql
+var responsibilitySQL string
+
 const schemaMigrationLockKey int64 = 7337741001
 
 // maxOpenConns 是连接池上限，见 Open 里的说明。取值远低于 PostgreSQL 默认的
@@ -45,7 +54,7 @@ func isPostgresDeadlock(err error) bool {
 
 func applySchemaWithRetry(ctx context.Context, execer schemaExecer, sleep func(time.Duration)) error {
 	for attempt := 0; ; attempt++ {
-		if _, err := execer.ExecContext(ctx, schemaSQL); err != nil {
+		if _, err := execer.ExecContext(ctx, schemaSQL+"\n"+findingHistorySQL+"\n"+findingReportsSQL+"\n"+responsibilitySQL); err != nil {
 			if !isPostgresDeadlock(err) || attempt >= len(schemaDeadlockRetryDelays) {
 				return err
 			}

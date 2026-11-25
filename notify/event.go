@@ -8,6 +8,7 @@ package notify
 // 而推送内容应当反映**事发当时**的结论——回查会得到「事后被改成 low」的
 // 危险误导。另外 fan-out 与渲染因此不必 JOIN findings/tasks/assets 三张表。
 type Snapshot struct {
+	Report *ReportContent `json:"report,omitempty"`
 	// 事件类型：finding_created / finding_status_changed
 	Kind      string  `json:"kind"`
 	FindingID int64   `json:"finding_id"`
@@ -56,6 +57,7 @@ func (i Item) Title() string {
 
 // Message 是一次渠道发送的完整内容。
 type Message struct {
+	Report *ReportContent
 	// 单条推送时长度为 1；汇总推送（digest）时为一整批。
 	// 空切片是非法的，调用方须保证至少一条。
 	Items []Item
@@ -66,4 +68,10 @@ type Message struct {
 	WindowMinutes int
 	// HomeURL 是平台面板地址（全局 public_base_url）；空则不带面板入口。
 	HomeURL string
+}
+
+type ReportContent struct {
+	ID    int64    `json:"id"`
+	Title string   `json:"title"`
+	Lines []string `json:"lines"`
 }

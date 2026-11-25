@@ -144,6 +144,19 @@ func (n *Notifier) step(ctx context.Context) {
 		// 投递已经消耗过重试次数。
 		now := time.Now()
 		if ch.Mode == db.NotifyModeDigest {
+			var reportDue bool
+			if err := n.pg.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM notification_deliveries d
+				JOIN notification_events e ON e.id=d.event_id WHERE d.channel_id=$1 AND e.kind='governance_report'
+				AND d.state IN ('pending','sending') AND d.next_attempt_at<=now())`, ch.ID).Scan(&reportDue); err != nil {
+				log.Printf("[notify] report delivery check: %v", err)
+				continue
+			}
+			if reportDue {
+				if allow := n.takeTokens(ch.ID, ch.RatePerMin, 1, now); allow > 0 {
+					n.stepRealtime(ctx, ch, allow, baseURL)
+				}
+				continue
+			}
 			tokens, claimLimit := digestTickPlan()
 			if n.takeTokens(ch.ID, ch.RatePerMin, tokens, now) <= 0 {
 				continue
@@ -377,6 +390,13 @@ func (n *Notifier) renderSingle(ctx context.Context, dl *db.NotificationDelivery
 	snap, err := parseSnapshot(dl)
 	if err != nil {
 		return notify.Message{}, err
+	}
+	if snap.Kind == notify.EventGovernanceReport && snap.Report != nil {
+		link := ""
+		if baseURL != "" {
+			link = fmt.Sprintf("%s/remediation-report?id=%d", baseURL, snap.Report.ID)
+		}
+		return notify.Message{Report: snap.Report, Items: []notify.Item{{Name: snap.Report.Title}}, HomeURL: link}, nil
 	}
 	item, err := n.itemFor(ctx, snap, baseURL)
 	if err != nil {

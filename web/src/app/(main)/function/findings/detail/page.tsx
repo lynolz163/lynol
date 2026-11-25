@@ -9,6 +9,9 @@ import { ArrowLeftIcon, ArrowUpRightIcon, ShieldAlertIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { CopyButton } from "@/components/copy-button";
+import { FindingMilestoneDialog } from "@/components/finding-milestone-dialog";
+import { FindingResponsibilityDialog } from "@/components/finding-responsibility-dialog";
+import { FindingHistoryPanel } from "@/components/finding-history-panel";
 import { FindingRetestPanel } from "@/components/finding-retest-panel";
 import { FindingTrafficPanel } from "@/components/finding-traffic-panel";
 import { Markdown } from "@/components/markdown";
@@ -22,6 +25,7 @@ import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
+import type { FindingHistoryEvent } from "@/lib/finding-metrics";
 import { statusMeta } from "@/lib/status";
 import type { Finding, FindingMilestone, FindingStatus, Severity } from "@/lib/types";
 
@@ -66,6 +70,8 @@ function FindingDetailInner() {
   const [loaded, setLoaded] = React.useState(false);
   const [tab, setTab] = React.useState("overview");
   const [savingMilestone, setSavingMilestone] = React.useState<FindingMilestone | null>(null);
+  const [selectedMilestone, setSelectedMilestone] = React.useState<(typeof MANUAL_MILESTONES)[number] | null>(null);
+  const [history, setHistory] = React.useState<FindingHistoryEvent[]>([]);
 
   const load = React.useCallback(() => {
     if (!id) {
@@ -133,14 +139,12 @@ function FindingDetailInner() {
 
   const title = finding.name || finding.vulnclass || "未分类";
 
-  async function recordMilestone(milestone: (typeof MANUAL_MILESTONES)[number]) {
+  async function recordMilestone(milestone: (typeof MANUAL_MILESTONES)[number], recordedAt?: string) {
     setSavingMilestone(milestone.action);
     try {
-      const { recorded_at } = await api.recordFindingMilestone(id, milestone.action, contextTaskId || undefined);
+      const { recorded_at } = await api.recordFindingMilestone(id, milestone.action, contextTaskId || undefined, recordedAt);
       setFinding((cur) => (cur?.id === id ? { ...cur, [milestone.field]: recorded_at } : cur));
       toast.success(`${milestone.label}已记录`);
-    } catch (e) {
-      toast.error(`记录失败：${(e as Error).message}`);
     } finally {
       setSavingMilestone(null);
     }
@@ -148,6 +152,15 @@ function FindingDetailInner() {
 
   return (
     <Tabs value={tab} onValueChange={setTab} className="flex flex-1 flex-col gap-0">
+      {selectedMilestone && (
+        <FindingMilestoneDialog
+          open
+          onOpenChange={(open) => { if (!open) setSelectedMilestone(null); }}
+          title={`记录${selectedMilestone.label}`}
+          description="填写实际发生时间，也可选择当前时间。本轮已有记录会保留。"
+          onSave={(at) => recordMilestone(selectedMilestone, at)}
+        />
+      )}
       {/* Sticky header */}
       <header className="sticky top-0 z-10 flex flex-col gap-2 border-b bg-background/95 px-4 py-2.5 backdrop-blur lg:px-6">
         <div className="flex flex-wrap items-center gap-2">
@@ -197,6 +210,8 @@ function FindingDetailInner() {
                 onStarted={load}
                 onCompleted={load}
               />
+              <Card><CardHeader><CardTitle className="text-sm">修复归属</CardTitle></CardHeader><CardContent className="flex flex-wrap items-center justify-between gap-3 text-sm"><div className="space-y-1"><p>业务线：{finding.business_line||"业务线未归属"}</p><p>负责人 / 团队：{finding.assignee||"负责人未指派"}</p></div><FindingResponsibilityDialog ids={[finding.id]} initial={finding} disabled={finding.inherited} onSaved={()=>load()}/></CardContent></Card>
+              <FindingHistoryPanel finding={finding} onHistory={setHistory} />
               <Card>
                 <CardHeader>
                   <CardTitle className="text-sm">证据 / PoC</CardTitle>
@@ -346,6 +361,15 @@ function FindingDetailInner() {
                 </FieldRow>
                 {MANUAL_MILESTONES.map((milestone) => {
                   const ts = finding[milestone.field];
+                  const newAttempt = history.some(
+                    (event) =>
+                      ts && Date.parse(event.occurred_at) > Date.parse(ts) && (
+                        (event.kind === "retest_completed" && event.metadata.status === "completed" &&
+                          event.metadata.verdict === "reproduced") ||
+                        (event.kind === "status_changed" && ["fixed", "resolved"].includes(event.old_status) &&
+                          !["fixed", "resolved"].includes(event.new_status))
+                      ),
+                  );
                   return (
                     <FieldRow key={milestone.action} label={milestone.label}>
                       {ts ? (
@@ -359,9 +383,19 @@ function FindingDetailInner() {
                           variant="outline"
                           size="sm"
                           disabled={savingMilestone !== null}
-                          onClick={() => void recordMilestone(milestone)}
+                          onClick={() => setSelectedMilestone(milestone)}
                         >
                           {savingMilestone === milestone.action ? "记录中…" : milestone.button}
+                        </Button>
+                      )}
+                      {newAttempt && !finding.inherited && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={savingMilestone !== null}
+                          onClick={() => setSelectedMilestone(milestone)}
+                        >
+                          记录本轮{milestone.action === "dispatched" ? "下发" : "开发反馈"}
                         </Button>
                       )}
                     </FieldRow>

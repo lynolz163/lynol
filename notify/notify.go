@@ -23,6 +23,7 @@ const (
 
 // 事件类型，对应 notification_events.kind。
 const (
+	EventGovernanceReport     = "governance_report"
 	EventFindingCreated       = "finding_created"
 	EventFindingStatusChanged = "finding_status_changed"
 )

@@ -1,9 +1,11 @@
+import type { BusinessLine, ResponsibilityDirectory, ResponsibilityParty, ResponsibilitySave, ResponsibilityRuleResult } from "@/lib/responsibility";
 // Real backend client. /api/* is proxied to the Go backend (next.config rewrites).
 // Returns the domain types in lib/types.ts. Shapes match the backend handlers;
 // a few fields the backend serializes differently (e.g. created_at as a unix int)
 // are passed through and formatted at the call site.
 
 import type { ChatMention } from "@/lib/chat-mentions";
+import type { FindingHistoryEvent, FindingMetricsReport, FindingSLA, FindingMetricsFilter, FindingReportSchedule, SavedFindingReport, FindingResponsibilityOptions } from "@/lib/finding-metrics";
 import { MOCK } from "@/lib/mock/enabled";
 import { mockHandle } from "@/lib/mock/handler";
 import type {
@@ -222,6 +224,9 @@ function findingFilterParams(q: Omit<FindingQuery, "page" | "pageSize">): URLSea
   if (q.task && q.task !== "all") p.set("task_id", q.task);
   if (q.query?.trim()) p.set("q", q.query.trim());
   if (q.sort) p.set("sort", q.sort);
+  if (q.business_line) p.set("business_line", q.business_line);
+  if (q.assignee) p.set("assignee", q.assignee);
+  if (q.active_only) p.set("active_only", "true");
   if (q.assetScope) p.set("asset_scope", q.assetScope);
   return p;
 }
@@ -234,6 +239,11 @@ function interceptPageQuery(page: number, size: number, filter: InterceptApprova
 }
 
 export const api = {
+  responsibilityDirectory: () => get<ResponsibilityDirectory>("/exploration/responsibility"),
+  saveBusinessLine: (line: BusinessLine) => put<ResponsibilitySave<BusinessLine>>("/exploration/responsibility/business-lines", line),
+  saveResponsibilityParty: (party: ResponsibilityParty) => put<ResponsibilitySave<{party: ResponsibilityParty;transferred:number}>>("/exploration/responsibility/parties", party),
+  saveResponsibilityFallback: (id: number) => put<ResponsibilitySave<{id:number}>>("/exploration/responsibility/fallback", {id}),
+  applyResponsibilityRules: () => put<ResponsibilitySave<ResponsibilityRuleResult>>("/exploration/responsibility/apply-rules", {}),
   // 后端应用版本号（release 时由 ldflags 注入，默认 "dev"）。
   health: () => get<{ ok: boolean; service: string; version: string }>("/health"),
 
@@ -540,6 +550,32 @@ export const api = {
   // ---- exploration (per task) ----
   frontier: (task?: string) => get<TaskNode[]>(`/exploration/frontier${tq(task)}`).then(arr),
   findings: (task?: string) => get<Finding[]>(`/exploration/findings${tq(task)}`).then(arr),
+  findingMetrics: (from: string, to: string, severity: string, business_line = "", assignee = "") =>
+    get<FindingMetricsReport>(
+      `/exploration/findings/metrics?${new URLSearchParams({ from, to, severity, business_line, assignee })}`,
+    ),
+  findingResponsibilityOptions: () => get<FindingResponsibilityOptions>("/exploration/findings/responsibility-options"),
+  setFindingResponsibility: (finding_ids: string[], business_line: string, assignee: string) =>
+    http<{ updated: string[] }>("/exploration/findings/responsibility", {
+      method: "PUT",
+      body: JSON.stringify({ finding_ids, business_line, assignee }),
+    }),
+  findingReportSchedules: () => get<{ items: FindingReportSchedule[] }>("/exploration/finding-report-schedules"),
+  saveFindingReportSchedule: (value: FindingReportSchedule) =>
+    http<FindingReportSchedule>("/exploration/finding-report-schedules", {
+      method: "PUT",
+      body: JSON.stringify(value),
+    }),
+  findingReports: () => get<{ items: SavedFindingReport[] }>("/exploration/finding-reports"),
+  generateFindingReport: (kind: "weekly" | "monthly", filter: FindingMetricsFilter) =>
+    post<{ id: number }>("/exploration/finding-reports", { kind, filter }),
+  findingReport: (id: number) => get<SavedFindingReport>(`/exploration/finding-reports/${id}`),
+  refreshFindingMetrics: () => post<{ ok: boolean }>("/exploration/findings/metrics/refresh", {}),
+  findingSLA: () => get<FindingSLA>("/exploration/findings/sla"),
+  setFindingSLA: (rules: FindingSLA) =>
+    http<FindingSLA>("/exploration/findings/sla", { method: "PUT", body: JSON.stringify(rules) }),
+  findingHistory: (id: string, before = 0) =>
+    get<{ items: FindingHistoryEvent[] }>(`/exploration/findings/${encodeURIComponent(id)}/history?before=${before}`),
   findingsPage: (q: FindingQuery) => {
     const p = findingFilterParams(q);
     p.set("page", String(q.page));
@@ -594,15 +630,16 @@ export const api = {
     get<Finding>(
       `/exploration/findings/${id}${contextTaskId ? `?context_task=${encodeURIComponent(contextTaskId)}` : ""}`,
     ),
-  recordFindingMilestone: (id: string, milestone: FindingMilestone, contextTaskId?: string) =>
+  recordFindingMilestone: (id: string, milestone: FindingMilestone, contextTaskId?: string, recordedAt?: string) =>
     post<{ recorded_at: string }>(
       `/exploration/findings/${id}/milestones${contextTaskId ? `?context_task=${encodeURIComponent(contextTaskId)}` : ""}`,
-      { milestone },
+      { milestone, recorded_at: recordedAt },
     ),
-  recordFindingMilestoneBatch: (findingIds: string[], milestone: FindingMilestone) =>
+  recordFindingMilestoneBatch: (findingIds: string[], milestone: FindingMilestone, recordedAt?: string) =>
     post<{ recorded: Record<string, string>; skipped: number }>("/exploration/findings/milestones", {
       finding_ids: findingIds,
       milestone,
+      recorded_at: recordedAt,
     }),
   findingTraffic: (id: string, contextTask?: string) =>
     get<FindingTraffic>(

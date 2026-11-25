@@ -5,6 +5,7 @@ import {
   Bot,
   Brain,
   Bug,
+  ChartNoAxesCombined,
   ClipboardList,
   FolderOpen,
   FolderSync,
@@ -20,6 +21,7 @@ import {
   Sparkles,
   Target,
   Terminal,
+  Users,
   Wrench,
 } from "lucide-react";
 
@@ -70,6 +72,7 @@ export const sidebarItems: NavGroup[] = [
       { id: "chat", title: "对话", url: "/chat", icon: MessageSquare },
       { id: "tasks", title: "任务", url: "/function/tasks", icon: Target },
       { id: "findings", title: "发现", url: "/function/findings", icon: Bug },
+      { id: "remediation", title: "漏洞治理", url: "/function/remediation", icon: ChartNoAxesCombined },
       { id: "traffic", title: "流量", url: "/function/traffic", icon: Activity },
       { id: "commands", title: "工具执行", url: "/function/commands", icon: Terminal },
       { id: "llm-records", title: "LLM 录制", url: "/function/llm-records", icon: Radio },
@@ -87,6 +90,7 @@ export const sidebarItems: NavGroup[] = [
       { id: "mcp", title: "MCP", url: "/system/mcp", icon: Plug },
       { id: "skills", title: "Skill", url: "/system/skills", icon: Sparkles },
       { id: "tools", title: "工具", url: "/system/tools", icon: Wrench },
+      { id: "responsibility", title: "业务线与负责人", url: "/system/responsibility", icon: Users },
       { id: "notify", title: "通知推送", url: "/system/notify", icon: BellRing },
       { id: "intercept", title: "拦截规则", url: "/system/intercept", icon: ShieldAlert },
       { id: "asset-intercept", title: "资产拦截", url: "/system/intercept/assets", icon: Ban },

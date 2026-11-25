@@ -33,7 +33,12 @@ import type {
   TrafficEvidenceRole,
   TrafficEvidenceSnapshot,
 } from "../types";
+import { mockResponsibilityDirectory, saveMockResponsibility, persistMockResponsibility } from "./responsibility";
+import { governancePreviewFindings } from "./remediation";
 import * as D from "./data";
+import type { FindingSLA, FindingMetricsFilter, FindingReportSchedule } from "../finding-metrics";
+import { mockReportSchedules, mockSavedReports, mockGenerateFindingReport, canRecordMockMilestone, mockFindingHistory, mockFindingMetrics, mockFindingSLA, recordMockFindingChange, saveMockFindingSLA, validateMockMilestoneTime } from "./remediation";
+import { lifecyclePreviewFindings, lifecyclePreviewRetests } from "./lifecycle-preview";
 
 const delay = (ms = 120) => new Promise((r) => setTimeout(r, ms));
 
@@ -43,13 +48,47 @@ const mockInterceptHistory = structuredClone(D.interceptHistory);
 const mockInterceptPending = structuredClone(D.interceptPending);
 const mockInterceptDetails = structuredClone(D.interceptDetails);
 const mockTasks = structuredClone(D.tasks);
-const mockFindings = structuredClone(D.findings);
+const mockFindings = structuredClone([...D.findings, ...governancePreviewFindings]);
 const mockLLMRecords = structuredClone(D.llmRecords);
 const mockTaskTemplates = structuredClone(D.taskTemplates);
 const mockTaskCategories = structuredClone(D.taskCategories);
 const mockConversations = structuredClone(D.conversations);
 const mockRetests: FindingRetest[] = [];
 const mockRetestMessages: Record<number, Activity[]> = {};
+
+for (const { finding, created_at, finished_at, verdict } of lifecyclePreviewRetests) {
+  const conversationID = Math.max(0, ...mockConversations.map((item) => item.id)) + 1;
+  const summary = verdict === "fixed" ? "模拟结论：已修复。" : "模拟结论：仍可复现。";
+  mockConversations.unshift({
+    id: conversationID,
+    agent_key: "retester",
+    title: "处置流程验收 · 模拟复测",
+    pinned: false,
+    created_at,
+    updated_at: finished_at ?? created_at,
+  });
+  mockRetests.unshift({
+    id: mockRetests.length + 1,
+    finding_id: D.findings.findIndex((item) => item.id === finding) + 1,
+    conversation_id: conversationID,
+    status: "completed",
+    verdict,
+    notes: "",
+    summary,
+    evidence: "",
+    error: "",
+    created_at,
+    started_at: created_at,
+    finished_at,
+  });
+  mockRetestMessages[conversationID] = [{
+    seq: 1,
+    worker: "retester",
+    ts: finished_at ?? created_at,
+    kind: "text",
+    summary,
+  }];
+}
 
 // ── 关联流量证据(finding traffic) ─────────────────────────────────────────────
 // 后端把请求/响应快照独立存到 evidence 表,前端详情页用 FindingTrafficPanel 展示。
@@ -175,12 +214,26 @@ function mockEvidencePreview(text: string): EvidenceBodyPreview {
 function advanceMockRetests() {
   for (const retest of mockRetests) {
     if (retest.status !== "running" || retest.conversation_id == null) continue;
-    if (Date.now() - Date.parse(retest.created_at) < 15000) continue;
+    const finding = D.findings[retest.finding_id - 1];
+    const preview = lifecyclePreviewFindings.some((item) => item.id === finding?.id);
+    if (Date.now() - Date.parse(retest.created_at) < (preview ? 3000 : 15000)) continue;
     retest.status = "completed";
     retest.verdict = "inconclusive";
     retest.summary = "演示环境未执行真实验证，无法确认漏洞当前状态。";
     retest.evidence =
       "### 演示记录\n\n已关联原漏洞。此环境未连接真实 Agent，也未向目标发送请求；请在实际部署中执行复测。";
+    if (preview) {
+      retest.verdict = finding.id === "lifecycle-reproduced" ? "reproduced" : "fixed";
+      retest.summary = retest.verdict === "fixed" ? "模拟结论：已修复。" : "模拟结论：仍可复现。";
+      retest.evidence = "此结果来自本地验收样例。";
+      const current = mockFindings.find((item) => item.id === finding.id);
+      if (current) {
+        const previous = { ...current };
+        if (retest.verdict === "fixed") current.status = "fixed";
+        else if (["fixed", "resolved"].includes(current.status)) current.status = "confirmed";
+        recordMockFindingChange(previous, current);
+      }
+    }
     retest.finished_at = new Date().toISOString();
     mockRetestMessages[retest.conversation_id].push({
       seq: 3,
@@ -470,7 +523,9 @@ function mockFilterFindings(q: URLSearchParams): (typeof mockFindings)[number][]
   const vulnclass = q.get("vulnclass");
   const taskID = q.get("task_id");
   if (severity) list = list.filter((finding) => finding.severity === severity);
-  if (status) list = list.filter((finding) => finding.status === status);
+  if (q.get("active_only")==="true") list=list.filter(finding=>["pending","in_progress","confirmed"].includes(finding.status));
+  else if (status) list = list.filter((finding) => finding.status === status);
+  for(const key of ["business_line","assignee"] as const){const value=q.get(key);if(value)list=list.filter(finding=>value==="__none__"?!finding[key]:finding[key]===value);}
   if (vulnclass) list = list.filter((finding) => finding.vulnclass === vulnclass);
   if (taskID === "__unassigned__") list = list.filter((finding) => !finding.task_id);
   else if (taskID) list = list.filter((finding) => finding.task_id === taskID);
@@ -1843,18 +1898,106 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     return { deleted: 1, assets_deleted: assetsDeleted };
   }
 
+  if (path === "/notify/channels" && m === "GET")
+    return {
+      channels: [
+        {
+          id: 9001,
+          name: "示例邮件（不发送）",
+          kind: "email",
+          enabled: true,
+          mode: "realtime",
+          config: {},
+          filter: {},
+          rate_per_min: 20,
+          secret_keys: [],
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+        {
+          id: 9002,
+          name: "示例企业微信（不发送）",
+          kind: "wecom",
+          enabled: true,
+          mode: "digest",
+          config: {},
+          filter: {},
+          rate_per_min: 20,
+          secret_keys: [],
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+      ],
+    };
+  if (path === "/exploration/responsibility") return mockResponsibilityDirectory(mockFindings);
+  if (path.startsWith("/exploration/responsibility/") && m === "PUT") return saveMockResponsibility(seg[2], b, mockFindings);
+  if (path === "/exploration/findings/responsibility-options") {
+    const directory=mockResponsibilityDirectory(mockFindings);
+    return {business_lines:directory.business_lines.map(b=>b.name),assignees:directory.parties.map(p=>p.name)};
+  }
+  if (path === "/exploration/findings/responsibility" && m === "PUT") {
+    const ids = new Set(b.finding_ids as string[]);
+    const updated: string[] = [];
+    for (const finding of mockFindings) {
+      if (!ids.has(finding.id)) continue;
+      const before = { ...finding };
+      finding.business_line = String(b.business_line ?? "");
+      finding.assignee = String(b.assignee ?? "");
+      recordMockFindingChange(before, finding);
+      updated.push(finding.id);
+    }
+    persistMockResponsibility(mockFindings);
+    return { updated };
+  }
+  if (path === "/exploration/finding-report-schedules") {
+    if (m === "PUT") {
+      const schedule = b as unknown as FindingReportSchedule;
+      if (schedule.enabled && !schedule.channel_id) throw new Error("请先选择接收渠道");
+      const index = mockReportSchedules.findIndex((item) => item.kind === schedule.kind);
+      mockReportSchedules[index] = structuredClone(schedule);
+      return schedule;
+    }
+    return { items: structuredClone(mockReportSchedules) };
+  }
+  if (path === "/exploration/finding-reports") {
+    if (m === "POST")
+      return mockGenerateFindingReport(b.kind as "weekly" | "monthly", b.filter as unknown as FindingMetricsFilter);
+    return { items: mockSavedReports.map(({ current: _current, previous: _previous, ...row }) => row) };
+  }
+  if (seg[0] === "exploration" && seg[1] === "finding-reports" && seg[2]) {
+    const report = mockSavedReports.find((item) => item.id === Number(seg[2]));
+    if (!report) throw new Error("报告不存在");
+    return structuredClone(report);
+  }
   // ── exploration ──
+  if (path === "/exploration/findings/metrics") { mockResponsibilityDirectory(mockFindings); return mockFindingMetrics(q); }
+  if (path === "/exploration/findings/metrics/refresh") return { ok: true };
+  if (path === "/exploration/findings/sla") {
+    return m === "PUT" ? saveMockFindingSLA(b as FindingSLA) : mockFindingSLA;
+  }
+  if (seg[0] === "exploration" && seg[1] === "findings" && seg[3] === "history") {
+    const finding = mockFindings.find((item) => item.id === seg[2]);
+    if (!finding) return { items: [] };
+    const findingID = D.findings.findIndex((item) => item.id === finding.id) + 1;
+    const events = mockFindingHistory(finding, mockRetests.filter((item) => item.finding_id === findingID));
+    const before = Number(q.get("before") ?? 0);
+    const offset = before ? events.findIndex((event) => event.id === before) + 1 : 0;
+    return { items: events.slice(offset, offset + 50) };
+  }
   if (path === "/exploration/frontier") return D.frontier;
   if (path === "/exploration/findings/milestones" && m === "POST") {
     if (!Array.isArray(b.finding_ids) || b.finding_ids.length === 0) throw new Error("请提供要记录的漏洞");
     if (b.milestone !== "dispatched" && b.milestone !== "developer_fixed") throw new Error("无效的漏洞处置节点");
     const field = b.milestone === "dispatched" ? "dispatched_at" : "developer_fixed_at";
     const ids = new Set(b.finding_ids);
-    const at = new Date().toISOString();
+    const at = typeof b.recorded_at === "string" ? b.recorded_at : new Date().toISOString();
     const recorded: Record<string, string> = {};
-    for (const finding of mockFindings) {
-      if (!ids.has(finding.id) || finding[field]) continue;
+    const eligible = mockFindings.filter(finding => ids.has(finding.id) && canRecordMockMilestone(finding, field));
+    for (const finding of eligible) validateMockMilestoneTime(finding, field, at);
+    for (const finding of eligible) {
+      const previous = { ...finding };
       finding[field] = at;
+      recordMockFindingChange(previous, finding);
       recorded[finding.id] = at;
     }
     return { recorded, skipped: ids.size - Object.keys(recorded).length };
@@ -2099,10 +2242,12 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
       return {};
     }
     if (m === "PATCH") {
+      const previous = { ...f };
       if (typeof b.status === "string") f.status = b.status as typeof f.status;
       if (typeof b.severity === "string") f.severity = b.severity as typeof f.severity;
       if (typeof b.name === "string") f.name = b.name;
       if (typeof b.vulnclass === "string") f.vulnclass = b.vulnclass;
+      recordMockFindingChange(previous, f);
     }
     const contextTaskId = q.get("context_task");
     const contextTask = contextTaskId ? mockTasks.find((item) => item.id === contextTaskId) : undefined;
@@ -2117,11 +2262,16 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
         throw new Error("漏洞不在当前任务中");
       }
       if (inherited) throw new Error("继承漏洞只读，请在来源任务中修改");
-      if (b.milestone === "dispatched") return { recorded_at: (f.dispatched_at ??= new Date().toISOString()) };
-      if (b.milestone === "developer_fixed") {
-        return { recorded_at: (f.developer_fixed_at ??= new Date().toISOString()) };
+      if (b.milestone !== "dispatched" && b.milestone !== "developer_fixed") throw new Error("无效的漏洞处置节点");
+      const field = b.milestone === "dispatched" ? "dispatched_at" : "developer_fixed_at";
+      const previous = { ...f };
+      if (canRecordMockMilestone(f, field)) {
+        const at = typeof b.recorded_at === "string" ? b.recorded_at : new Date().toISOString();
+        validateMockMilestoneTime(f, field, at);
+        f[field] = at;
       }
-      throw new Error("无效的漏洞处置节点");
+      recordMockFindingChange(previous, f);
+      return { recorded_at: f[field] };
     }
     const findingID = D.findings.findIndex((item) => item.id === f.id) + 1;
     const retests = mockRetests.filter((item) => item.finding_id === findingID);
@@ -2134,8 +2284,10 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     return {
       ...f,
       finding_id: f.id,
-      retest_requested_at: latestRetest?.created_at,
-      verified_fixed_at: verified?.finished_at ?? undefined,
+      retest_requested_at: latestRetest?.created_at ?? f.retest_requested_at,
+      verified_fixed_at: ["fixed", "resolved"].includes(f.status)
+        ? verified?.finished_at ?? (reopened ? undefined : f.verified_fixed_at)
+        : undefined,
       traffic_count: mockTrafficCount(f.id),
       ...(inherited ? { inherited: true, source_task_id: f.task_id } : {}),
     };

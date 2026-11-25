@@ -31,6 +31,10 @@ type DBFinding struct {
 	Worker          string
 	AssetIDs        []int64
 	Status          string
+	BusinessLineID  *int64
+	AssigneeID      *int64
+	BusinessLine    string
+	Assignee        string
 	Report          string // 详细报告(Markdown);仅 GetFinding 填充,列表查询不带
 	CreatedAt       time.Time
 	TaskDescription string // populated via LEFT JOIN on tasks
@@ -110,7 +114,8 @@ func (d *DB) AddFinding(taskID, nodeID int64, vulnclass, name, severity, summary
 const findingSelectCols = `f.id, f.task_id, f.node_id, f.vulnclass, COALESCE(f.name, ''), f.severity, f.summary,
 	       f.evidence, f.worker, f.asset_ids, COALESCE(f.status, 'pending'), f.created_at,
 	       COALESCE(t.description, '') AS task_description, f.evidence_version, f.report_evidence_version,
- (SELECT count(*) FROM finding_traffic_bindings b WHERE b.finding_id=f.id), f.dispatched_at, f.developer_fixed_at`
+ (SELECT count(*) FROM finding_traffic_bindings b WHERE b.finding_id=f.id), f.dispatched_at, f.developer_fixed_at,
+ f.business_line, f.assignee, f.business_line_id, f.assignee_id`
 
 // scanFindings materializes rows selected via findingSelectCols.
 func scanFindings(rows interface {
@@ -125,7 +130,7 @@ func scanFindings(rows interface {
 		if err := rows.Scan(&f.ID, &f.TaskID, &f.NodeID, &f.VulnClass, &f.Name, &f.Severity,
 			&f.Summary, &f.Evidence, &f.Worker, &aidsJSON, &f.Status, &f.CreatedAt,
 			&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.TrafficCount,
-			&f.DispatchedAt, &f.DeveloperFixedAt); err != nil {
+			&f.DispatchedAt, &f.DeveloperFixedAt, &f.BusinessLine, &f.Assignee, &f.BusinessLineID, &f.AssigneeID); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(aidsJSON), &f.AssetIDs)
@@ -157,12 +162,15 @@ func (d *DB) ListFindings(limit int) ([]*DBFinding, error) {
 // filter on that column". Sort is "severity" (severity desc, then newest) or
 // anything else (newest first).
 type FindingFilter struct {
-	Severity  string // high | medium | low
-	Status    string // pending | false_positive | ignored | resolved
-	VulnClass string
-	TaskID    string // 任务 id(字符串形式;空/非法 = 不按任务筛选)
-	Query     string // 名称/类型/摘要/证据/报告正文的模糊检索关键词
-	Sort      string // "severity" | "time"
+	BusinessLine string
+	Assignee     string
+	ActiveOnly   bool
+	Severity     string // high | medium | low
+	Status       string // pending | false_positive | ignored | resolved
+	VulnClass    string
+	TaskID       string // 任务 id(字符串形式;空/非法 = 不按任务筛选)
+	Query        string // 名称/类型/摘要/证据/报告正文的模糊检索关键词
+	Sort         string // "severity" | "time"
 	// AssetScope 是资产树的节点 key(a:<id> / c:<id> / r:<domain> / __none__),
 	// 选中一个节点等于选中它的整棵子树。空 = 不按资产筛选。
 	AssetScope string
@@ -192,7 +200,18 @@ func (f FindingFilter) where() (string, []any) {
 		conds = append(conds, fmt.Sprintf("f.%s = $%d", col, len(args)))
 	}
 	add("severity", f.Severity)
-	add("status", f.Status)
+	if f.ActiveOnly {
+		conds = append(conds, "f.status IN ('pending','in_progress','confirmed')")
+	} else {
+		add("status", f.Status)
+	}
+	for _, field := range []struct{ column, value string }{{"business_line", f.BusinessLine}, {"assignee", f.Assignee}} {
+		if field.value == "__none__" {
+			conds = append(conds, "f."+field.column+"=''")
+		} else {
+			add(field.column, field.value)
+		}
+	}
 	add("vulnclass", f.VulnClass)
 	// task_id 是 bigint 列,按整数比较(不能走上面的文本 add);空/非法值忽略。
 	if f.TaskID == FindingUnassignedTask {
@@ -519,7 +538,7 @@ func (d *DB) ListFindingsForExport(f FindingFilter, ids []int64) ([]*DBFinding, 
 		if err := rows.Scan(&f.ID, &f.TaskID, &f.NodeID, &f.VulnClass, &f.Name, &f.Severity,
 			&f.Summary, &f.Evidence, &f.Worker, &aidsJSON, &f.Status, &f.CreatedAt,
 			&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.TrafficCount,
-			&f.DispatchedAt, &f.DeveloperFixedAt, &f.Report); err != nil {
+			&f.DispatchedAt, &f.DeveloperFixedAt, &f.BusinessLine, &f.Assignee, &f.BusinessLineID, &f.AssigneeID, &f.Report); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(aidsJSON), &f.AssetIDs)
@@ -647,6 +666,7 @@ func (d *DB) GetFinding(id int64) (*DBFinding, error) {
 		 WHERE r.finding_id=f.id ORDER BY r.id DESC LIMIT 1),
 		(SELECT r.finished_at FROM finding_retests r
 		 WHERE r.finding_id=f.id AND r.status='completed' AND r.verdict='fixed'
+		   AND f.status IN ('fixed','resolved')
 		   AND r.finished_at IS NOT NULL
 		   AND r.id > COALESCE((SELECT max(p.id) FROM finding_retests p
 		       WHERE p.finding_id=f.id AND p.status='completed' AND p.verdict='reproduced'), 0)
@@ -657,7 +677,7 @@ func (d *DB) GetFinding(id int64) (*DBFinding, error) {
 		&f.ID, &f.TaskID, &f.NodeID, &f.VulnClass, &f.Name, &f.Severity,
 		&f.Summary, &f.Evidence, &f.Worker, &aidsJSON, &f.Status, &f.CreatedAt,
 		&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.TrafficCount,
-		&f.DispatchedAt, &f.DeveloperFixedAt, &f.Report, &f.RetestRequestedAt, &f.VerifiedFixedAt)
+		&f.DispatchedAt, &f.DeveloperFixedAt, &f.BusinessLine, &f.Assignee, &f.BusinessLineID, &f.AssigneeID, &f.Report, &f.RetestRequestedAt, &f.VerifiedFixedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -669,6 +689,7 @@ func (d *DB) GetFinding(id int64) (*DBFinding, error) {
 }
 
 var ErrInvalidFindingMilestone = errors.New("无效的漏洞处置节点")
+var ErrInvalidFindingMilestoneTime = errors.New("无效的漏洞处置时间")
 
 func findingMilestoneColumn(milestone string) (string, error) {
 	switch milestone {
@@ -681,29 +702,84 @@ func findingMilestoneColumn(milestone string) (string, error) {
 	}
 }
 
-// RecordFindingMilestone keeps the first server timestamp for each manual action.
-func (d *DB) RecordFindingMilestone(ctx context.Context, id int64, milestone string) (time.Time, error) {
-	column, err := findingMilestoneColumn(milestone)
+// RecordFindingMilestone records each remediation attempt in the journal.
+func (d *DB) RecordFindingMilestone(ctx context.Context, id int64, milestone string, recordedAt *time.Time) (time.Time, error) {
+	recorded, err := d.RecordFindingMilestoneBatch(ctx, []int64{id}, milestone, recordedAt)
 	if err != nil {
 		return time.Time{}, err
 	}
+	if at, ok := recorded[strconv.FormatInt(id, 10)]; ok {
+		return at, nil
+	}
+	// A repeated submission keeps the existing timestamp for this attempt.
 	var at time.Time
-	err = d.QueryRowContext(ctx, `UPDATE findings SET `+column+`=COALESCE(`+column+`, now())
-		WHERE id=$1 RETURNING `+column, id).Scan(&at)
+	err = d.QueryRowContext(ctx, `SELECT CASE WHEN $2='dispatched' THEN dispatched_at ELSE developer_fixed_at END
+		FROM findings WHERE id=$1`, id, milestone).Scan(&at)
 	if errors.Is(err, sql.ErrNoRows) {
 		return time.Time{}, ErrFindingNotFound
 	}
 	return at, err
 }
 
-// RecordFindingMilestoneBatch sets one timestamp for the IDs missing this milestone.
-func (d *DB) RecordFindingMilestoneBatch(ctx context.Context, ids []int64, milestone string) (map[string]time.Time, error) {
+// RecordFindingMilestoneBatch records missing milestones or a new remediation attempt.
+func (d *DB) RecordFindingMilestoneBatch(ctx context.Context, ids []int64, milestone string, recordedAt *time.Time) (map[string]time.Time, error) {
 	column, err := findingMilestoneColumn(milestone)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := d.QueryContext(ctx, `UPDATE findings SET `+column+`=now()
-		WHERE id=ANY($1::bigint[]) AND `+column+` IS NULL RETURNING id, `+column, ids)
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var chosenAt time.Time
+	if err := tx.QueryRowContext(ctx, `SELECT now()`).Scan(&chosenAt); err != nil {
+		return nil, err
+	}
+	if recordedAt != nil {
+		if recordedAt.After(chosenAt) {
+			return nil, fmt.Errorf("%w：不能晚于当前时间", ErrInvalidFindingMilestoneTime)
+		}
+		chosenAt = *recordedAt
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT f.id,f.created_at,f.dispatched_at,f.developer_fixed_at,
+		COALESCE((SELECT max(h.occurred_at) FROM finding_history h WHERE h.finding_id=f.id AND (
+		  (h.kind='status_changed' AND h.old_status IN ('fixed','resolved') AND h.new_status NOT IN ('fixed','resolved'))
+		  OR (h.kind='retest_completed' AND h.metadata->>'status'='completed' AND h.metadata->>'verdict'='reproduced')
+		)),f.created_at) FROM findings f
+		WHERE f.id=ANY($1::bigint[]) AND (`+column+` IS NULL OR `+
+		fmt.Sprintf(findingNewAttempt, "f."+column)+`)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	eligible := []int64{}
+	for rows.Next() {
+		var id int64
+		var discovered, cycle time.Time
+		var dispatched, fixed *time.Time
+		if err := rows.Scan(&id, &discovered, &dispatched, &fixed, &cycle); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		invalid := chosenAt.Before(discovered) || chosenAt.Before(cycle)
+		if milestone == "developer_fixed" && dispatched != nil && !dispatched.Before(cycle) {
+			invalid = invalid || chosenAt.Before(*dispatched)
+		}
+		if milestone == "dispatched" && fixed != nil && !fixed.Before(cycle) {
+			invalid = invalid || chosenAt.After(*fixed)
+		}
+		if invalid {
+			rows.Close()
+			return nil, fmt.Errorf("%w：漏洞 #%d 的时间不能早于发现或本轮重开，下发时间不能晚于本轮开发反馈修复时间", ErrInvalidFindingMilestoneTime, id)
+		}
+		eligible = append(eligible, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	rows, err = tx.QueryContext(ctx, `UPDATE findings SET `+column+`=$2 WHERE id=ANY($1::bigint[]) RETURNING id, `+column, eligible, chosenAt)
 	if err != nil {
 		return nil, err
 	}
@@ -717,7 +793,11 @@ func (d *DB) RecordFindingMilestoneBatch(ctx context.Context, ids []int64, miles
 		}
 		recorded[strconv.FormatInt(id, 10)] = at
 	}
-	return recorded, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	return recorded, tx.Commit()
 }
 
 // DeleteFinding removes a finding entirely: the standalone findings row and its

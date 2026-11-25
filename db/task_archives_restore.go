@@ -81,6 +81,9 @@ WHERE relation.source_task_id=$1 LIMIT 1`, taskID).Scan(&dependent)
 	if _, err := tx.Exec(`DELETE FROM side_question_sessions WHERE task_id=$1`, taskID); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(`SELECT set_config('artex.finding_archiving','true',true)`); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM findings WHERE task_id=$1`, taskID); err != nil {
 		return err
 	}
@@ -290,6 +293,20 @@ WHERE archive.id=$1 FOR UPDATE OF archive,task`, archiveID).Scan(&taskID, &expID
 		if err := insertArchiveRows(tx, table, remappedTables[table]); err != nil {
 			return nil, fmt.Errorf("restore %s: %w", table, err)
 		}
+	}
+	// Resolve archived labels through the current directory without rewriting its journal.
+	if _, err := tx.Exec(`UPDATE findings f SET
+ business_line_id=(SELECT id FROM business_lines WHERE name=f.business_line OR f.business_line=ANY(aliases) LIMIT 1),
+ assignee_id=(SELECT id FROM responsibility_parties WHERE name=f.assignee OR f.assignee=ANY(aliases) LIMIT 1)
+ WHERE f.task_id=$1`, taskID); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(`UPDATE findings f SET
+ business_line=COALESCE((SELECT name FROM business_lines WHERE id=f.business_line_id),f.business_line),
+ assignee=COALESCE((SELECT name FROM responsibility_parties WHERE id=f.assignee_id),f.assignee),
+ responsibility_sla=(SELECT sla FROM business_lines WHERE id=f.business_line_id)
+ WHERE f.task_id=$1`, taskID); err != nil {
+		return nil, err
 	}
 	if err := restoreInterceptRows(tx, remappedTables["intercept_pending"]); err != nil {
 		return nil, err
