@@ -317,7 +317,7 @@ func TestWebhookValidateCatchesBadConfigEarly(t *testing.T) {
 }
 
 func TestEmailMessageIsWellFormed(t *testing.T) {
-	msg, err := buildEmailMessage("artex@example.com", []string{"a@example.com", "b@example.com"}, singleMsg())
+	msg, err := buildEmailMessage("artex@example.com", []string{"a@example.com", "b@example.com"}, nil, singleMsg())
 	if err != nil {
 		t.Fatalf("组装邮件失败: %v", err)
 	}

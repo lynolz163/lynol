@@ -29,6 +29,18 @@ const nextConfig = {
       ? {
           // Vercel mock demo：无后端，不需要 /api 反代。
           images: { unoptimized: true },
+          // Local organization acceptance uses an isolated real database while
+          // the rest of the console keeps its sample data.
+          ...(process.env.ORG_PREVIEW_API
+            ? { async rewrites() {
+                const backend = process.env.ORG_PREVIEW_API;
+                const routes = ["/api/org/:path*"];
+                if (process.env.NEXT_PUBLIC_GOVERNANCE_REAL_API === "1") {
+                  routes.push("/api/exploration/findings/:path*", "/api/exploration/finding-groups/:path*", "/api/exploration/finding-asset-tree/:path*", "/api/exploration/responsibility/:path*", "/api/exploration/responsibility-options", "/api/exploration/finding-reports/:path*", "/api/exploration/finding-report-schedules");
+                }
+                return routes.map((source) => ({ source, destination: `${backend}${source}` }));
+              } }
+            : {}),
         }
       : {
           // 开发：把 /api/* 反代到 Go 后端（默认 :8787，可用 AUTOPENTEST_API 覆盖）。

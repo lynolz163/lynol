@@ -151,6 +151,15 @@ func cfgBool(cfg map[string]any, key string) bool {
 
 // cfgStrings 取字符串数组配置项，自动裁空白并丢弃空串。
 func cfgStrings(cfg map[string]any, key string) []string {
+	if values, ok := cfg[key].([]string); ok {
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			if value = strings.TrimSpace(value); value != "" {
+				out = append(out, value)
+			}
+		}
+		return out
+	}
 	raw, ok := cfg[key].([]any)
 	if !ok {
 		// 也接受单个字符串，方便只有一个值时的表单提交。

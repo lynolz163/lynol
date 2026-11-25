@@ -31,6 +31,7 @@ import {
   type FindingReportSchedule,
   type FindingResponsibilityOptions,
   findingDeliveryLabels,
+  GOVERNANCE_MOCK,
   type SavedFindingReport,
 } from "@/lib/finding-metrics";
 import { downloadGovernanceWorkbook, findingFilterLabel } from "@/lib/governance-export";
@@ -52,12 +53,19 @@ export function FindingReportsPanel({
   const [reports, setReports] = useState<SavedFindingReport[]>([]);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [departmentQuery, setDepartmentQuery] = useState("");
   useEffect(() => {
     let active = true;
     Promise.all([api.findingReportSchedules(), api.notifyChannels(), api.findingReports()]).then(
       ([s, c, r]) => {
         if (active) {
-          setSchedules(s.items);
+          setSchedules(
+            s.items.map((schedule) =>
+              GOVERNANCE_MOCK
+                ? schedule
+                : { ...schedule, scope_mode: "departments", department_ids: schedule.department_ids || [] },
+            ),
+          );
           setChannels(c.filter((ch) => ["email", "wecom"].includes(ch.kind)));
           setReports(r.items);
         }
@@ -74,9 +82,15 @@ export function FindingReportsPanel({
     setSchedules((items) => items.map((item) => (item.kind === kind ? { ...item, ...patch } : item)));
   }
   async function save(schedule: FindingReportSchedule) {
+    if (!GOVERNANCE_MOCK && !schedule.department_ids?.length) {
+      toast.error("请至少选择一个部门，再保存计划");
+      return;
+    }
     setBusy(schedule.kind);
     try {
-      await api.saveFindingReportSchedule(schedule);
+      await api.saveFindingReportSchedule(
+        GOVERNANCE_MOCK ? schedule : { ...schedule, scope_mode: "departments", channel_id: null },
+      );
       toast.success(schedule.enabled ? "报告计划已启用" : "报告计划已保存，当前停用");
     } catch (e) {
       toast.error((e as Error).message);
@@ -102,7 +116,14 @@ export function FindingReportsPanel({
     try {
       const report = await api.findingReport(id);
       if (!report.current) throw new Error("报告内容不存在");
-      downloadGovernanceWorkbook(report.current, report.from, report.to, report.filter, report.previous);
+      downloadGovernanceWorkbook(
+        report.current,
+        report.from,
+        report.to,
+        report.filter,
+        report.previous,
+        options.directory,
+      );
     } catch (reason) {
       toast.error((reason as Error).message);
     } finally {
@@ -133,7 +154,11 @@ export function FindingReportsPanel({
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>生成报告</DialogTitle>
-                  <DialogDescription>保存所选范围的完整周期报告。</DialogDescription>
+                  <DialogDescription>
+                    {GOVERNANCE_MOCK
+                      ? "保存所选范围的完整周期报告。"
+                      : "选择一个部门，保存完整周期报告。多部门可通过定时计划分别生成。"}
+                  </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4">
                   <Select value={period} onValueChange={(value) => setPeriod(value as "weekly" | "monthly")}>
@@ -153,7 +178,10 @@ export function FindingReportsPanel({
                       labelPrefix="生成报告"
                     />
                   </div>
-                  <Button disabled={!!busy} onClick={() => void generate(period)}>
+                  <Button
+                    disabled={!!busy || (!GOVERNANCE_MOCK && !filter.department_id)}
+                    onClick={() => void generate(period)}
+                  >
                     {busy.startsWith("generate-") ? "生成中…" : "确认生成"}
                   </Button>
                 </div>
@@ -169,7 +197,9 @@ export function FindingReportsPanel({
               <SheetContent className="overflow-y-auto data-[side=right]:w-full data-[side=right]:sm:max-w-xl">
                 <SheetHeader>
                   <SheetTitle>定时周报 / 月报</SheetTitle>
-                  <SheetDescription>按计划生成，并发送到所选通知渠道。</SheetDescription>
+                  <SheetDescription>
+                    {GOVERNANCE_MOCK ? "按计划生成，并发送到所选通知渠道。" : "按部门分别生成，推送给各部门负责人。"}
+                  </SheetDescription>
                 </SheetHeader>
                 <div className="space-y-4 px-4 pb-6">
                   {schedules.map((schedule) => (
@@ -233,29 +263,31 @@ export function FindingReportsPanel({
                           />
                           <span className="text-muted-foreground text-xs">北京时间</span>
                         </div>
-                        <Select
-                          value={schedule.channel_id ? String(schedule.channel_id) : "none"}
-                          onValueChange={(value) =>
-                            change(schedule.kind, { channel_id: value === "none" ? null : Number(value) })
-                          }
-                        >
-                          <SelectTrigger
-                            aria-label={schedule.kind === "weekly" ? "周报接收渠道" : "月报接收渠道"}
-                            className="w-full"
+                        {GOVERNANCE_MOCK && (
+                          <Select
+                            value={schedule.channel_id ? String(schedule.channel_id) : "none"}
+                            onValueChange={(value) =>
+                              change(schedule.kind, { channel_id: value === "none" ? null : Number(value) })
+                            }
                           >
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="none">选择邮件或企业微信渠道</SelectItem>
-                            {channels.map((channel) => (
-                              <SelectItem key={channel.id} value={String(channel.id)} disabled={!channel.enabled}>
-                                {channel.name}
-                                {channel.enabled ? "" : "（已停用）"}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        {!channels.length && (
+                            <SelectTrigger
+                              aria-label={schedule.kind === "weekly" ? "周报接收渠道" : "月报接收渠道"}
+                              className="w-full"
+                            >
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none">选择邮件或企业微信渠道</SelectItem>
+                              {channels.map((channel) => (
+                                <SelectItem key={channel.id} value={String(channel.id)} disabled={!channel.enabled}>
+                                  {channel.name}
+                                  {channel.enabled ? "" : "（已停用）"}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                        {GOVERNANCE_MOCK && !channels.length && (
                           <p className="text-muted-foreground text-xs">
                             尚无可用渠道。先在{" "}
                             <Link href="/system/notify" className="text-primary underline">
@@ -266,16 +298,99 @@ export function FindingReportsPanel({
                         )}
                         <div className="space-y-2">
                           <p className="font-medium text-xs">报告范围</p>
+                          {!GOVERNANCE_MOCK && (
+                            <div className="space-y-3 rounded-lg border p-3">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-medium text-sm">部门（可多选）</span>
+                                <Button
+                                  variant="link"
+                                  size="sm"
+                                  className="h-auto p-0"
+                                  onClick={() =>
+                                    change(schedule.kind, {
+                                      department_ids:
+                                        options.directory?.departments
+                                          .filter((department) => department.active)
+                                          .map((department) => department.id) || [],
+                                      filter: {
+                                        ...schedule.filter,
+                                        department_id: undefined,
+                                        business_line_id: undefined,
+                                        owner_id: undefined,
+                                      },
+                                    })
+                                  }
+                                >
+                                  选择全部启用部门
+                                </Button>
+                              </div>
+                              <Input
+                                aria-label={`${schedule.kind === "weekly" ? "周报" : "月报"}部门搜索`}
+                                placeholder="搜索部门"
+                                value={departmentQuery}
+                                onChange={(event) => setDepartmentQuery(event.target.value)}
+                              />
+                              <div className="max-h-40 space-y-2 overflow-y-auto">
+                                {options.directory?.departments
+                                  .filter(
+                                    (department) =>
+                                      (department.active || schedule.department_ids?.includes(department.id)) &&
+                                      department.name.toLowerCase().includes(departmentQuery.toLowerCase()),
+                                  )
+                                  .map((department) => (
+                                    <label key={department.id} className="flex items-center gap-2 text-sm">
+                                      <input
+                                        type="checkbox"
+                                        checked={schedule.department_ids?.includes(department.id) || false}
+                                        onChange={(event) => {
+                                          const ids = event.target.checked
+                                            ? [...(schedule.department_ids || []), department.id]
+                                            : (schedule.department_ids || []).filter((id) => id !== department.id);
+                                          change(schedule.kind, {
+                                            department_ids: ids,
+                                            filter: {
+                                              ...schedule.filter,
+                                              department_id: ids.length === 1 ? ids[0] : undefined,
+                                              business_line_id: undefined,
+                                              owner_id: undefined,
+                                            },
+                                          });
+                                        }}
+                                      />
+                                      {department.name}
+                                      {!department.active && <span className="text-muted-foreground">（已停用）</span>}
+                                    </label>
+                                  ))}
+                              </div>
+                              <p className="text-muted-foreground text-xs">
+                                已选 {schedule.department_ids?.length || 0}{" "}
+                                个部门，将分别生成报告。缺少负责人或可用渠道时会保留报告并标记无法投递。
+                              </p>
+                            </div>
+                          )}
                           <div className="flex flex-wrap gap-2">
                             <FindingMetricsScope
-                              filter={schedule.filter}
+                              filter={
+                                GOVERNANCE_MOCK
+                                  ? schedule.filter
+                                  : {
+                                      ...schedule.filter,
+                                      department_id:
+                                        schedule.department_ids?.length === 1 ? schedule.department_ids[0] : undefined,
+                                    }
+                              }
                               options={options}
+                              hideDepartment={!GOVERNANCE_MOCK}
+                              hideResponsibility={!GOVERNANCE_MOCK && schedule.department_ids?.length !== 1}
                               onChange={(value) => change(schedule.kind, { filter: value })}
                               labelPrefix={schedule.kind === "weekly" ? "周报计划" : "月报计划"}
                             />
                           </div>
                         </div>
-                        <Button disabled={!!busy} onClick={() => void save(schedule)}>
+                        <Button
+                          disabled={!!busy || (!GOVERNANCE_MOCK && !schedule.department_ids?.length)}
+                          onClick={() => void save(schedule)}
+                        >
                           {busy === schedule.kind ? "保存中…" : "保存计划"}
                         </Button>
                       </CardContent>
@@ -287,6 +402,7 @@ export function FindingReportsPanel({
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
+          <p className="text-muted-foreground text-xs">按生成时的归属统计，已保存报告不随组织调整重算。</p>
           <div className="flex items-center justify-between gap-2">
             <Select value={historyKind} onValueChange={setHistoryKind}>
               <SelectTrigger aria-label="历史报告类型" className="w-32">
@@ -335,15 +451,24 @@ export function FindingReportsPanel({
                       >
                         {report.kind === "weekly" ? "周报" : "月报"} · {report.from} — {report.to}
                       </Link>
+                      {(report.attribution_version ?? 0) === 0 && (
+                        <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-muted-foreground text-xs">
+                          旧口径
+                        </span>
+                      )}
                     </TableCell>
                     <TableCell className="max-w-64 whitespace-normal text-xs">
-                      {findingFilterLabel(report.filter)}
+                      {findingFilterLabel(report.filter, options.directory)}
                     </TableCell>
                     <TableCell className="text-xs">{new Date(report.generated_at).toLocaleString("zh-CN")}</TableCell>
                     <TableCell>
                       <span>{findingDeliveryLabels[report.delivery_state] ?? report.delivery_state}</span>
-                      {report.delivery_error && (
-                        <p className="max-w-48 whitespace-normal text-destructive text-xs">{report.delivery_error}</p>
+                      {(report.delivery_error || report.delivery_context?.message) && (
+                        <p
+                          className={`max-w-56 whitespace-normal text-xs ${report.delivery_state === "failed" ? "text-destructive" : "text-muted-foreground"}`}
+                        >
+                          {report.delivery_error || report.delivery_context?.message}
+                        </p>
                       )}
                     </TableCell>
                     <TableCell>
@@ -361,6 +486,8 @@ export function FindingReportsPanel({
                           <Button
                             size="sm"
                             variant="outline"
+                            disabled={process.env.NEXT_PUBLIC_MOCK === "1"}
+                            title={process.env.NEXT_PUBLIC_MOCK === "1" ? "本地预览不发送真实通知" : undefined}
                             onClick={() => {
                               const deliveryID = report.delivery_id;
                               if (deliveryID === null) return;

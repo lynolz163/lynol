@@ -20,7 +20,6 @@ import {
 import { toast } from "sonner";
 
 import { FindingMilestoneDialog } from "@/components/finding-milestone-dialog";
-import { FindingResponsibilityDialog } from "@/components/finding-responsibility-dialog";
 import { FindingRetestDialog } from "@/components/finding-retest-dialog";
 import { StatusBadge } from "@/components/status-badge";
 import { TablePagination } from "@/components/table-pagination";
@@ -44,6 +43,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { api } from "@/lib/api";
 import { getLocalStorageValue, setLocalStorageValue } from "@/lib/local-storage.client";
+import { type OrgDirectory, orgAPI } from "@/lib/org";
 import { statusMeta } from "@/lib/status";
 import type {
   ActiveFindingRetest,
@@ -154,22 +154,21 @@ const EMPTY_STATS: FindingStats = {
 
 export default function FindingsPage() {
   const [responsibilityScope, setResponsibilityScope] = React.useState({
-    business_line: "",
-    assignee: "",
+    department_id: "",
+    business_line_id: "",
+    owner_id: "",
     active_only: false,
   });
-  const [responsibilityOptions, setResponsibilityOptions] = React.useState({
-    business_lines: [] as string[],
-    assignees: [] as string[],
-  });
+  const [responsibilityOptions, setResponsibilityOptions] = React.useState<OrgDirectory>();
   React.useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     setResponsibilityScope({
-      business_line: q.get("business_line") ?? "",
-      assignee: q.get("assignee") ?? "",
+      department_id: q.get("department_id") ?? "",
+      business_line_id: q.get("business_line_id") ?? (q.get("business_line") === "__none__" ? "0" : ""),
+      owner_id: q.get("owner_id") ?? (q.get("assignee") === "__none__" ? "0" : ""),
       active_only: q.get("active_only") === "true",
     });
-    api.findingResponsibilityOptions().then(setResponsibilityOptions, () => toast.error("读取归属筛选失败"));
+    orgAPI.directory().then(setResponsibilityOptions, () => toast.error("读取归属筛选失败"));
   }, []);
   const [view, setView] = React.useState<FindingView>("flat");
   const [severity, setSeverity] = React.useState<"all" | Severity>("all");
@@ -988,21 +987,73 @@ export default function FindingsPage() {
             ))}
           </ToggleGroup>
 
-          {(["business_line", "assignee"] as const).map((key) => (
+          {(
+            [
+              {
+                key: "department_id",
+                label: "部门",
+                empty: "部门未归属",
+                items: responsibilityOptions?.departments ?? [],
+              },
+              {
+                key: "business_line_id",
+                label: "业务线",
+                empty: "业务线未归属",
+                items: (responsibilityOptions?.business_lines ?? []).filter(
+                  (line) =>
+                    !responsibilityScope.department_id ||
+                    String(line.department_id) === responsibilityScope.department_id,
+                ),
+              },
+              {
+                key: "owner_id",
+                label: "负责人",
+                empty: "负责人未指派",
+                items: (responsibilityOptions?.people ?? []).filter((person) => {
+                  if (!responsibilityScope.business_line_id)
+                    return (
+                      !responsibilityScope.department_id ||
+                      String(person.department_id ?? 0) === responsibilityScope.department_id
+                    );
+                  const line = responsibilityOptions?.business_lines.find(
+                    (item) => String(item.id) === responsibilityScope.business_line_id,
+                  );
+                  const department = responsibilityOptions?.departments.find((item) => item.id === line?.department_id);
+                  return [
+                    line?.primary_id,
+                    line?.backup_id,
+                    department?.head_id,
+                    responsibilityOptions?.fallback_id,
+                  ].includes(person.id);
+                }),
+              },
+            ] as const
+          ).map(({ key, label, empty, items }) => (
             <Select
               key={key}
               value={responsibilityScope[key] || "__all__"}
-              onValueChange={(v) => setResponsibilityScope({ ...responsibilityScope, [key]: v === "__all__" ? "" : v })}
+              onValueChange={(value) =>
+                setResponsibilityScope((current) => ({
+                  ...current,
+                  [key]: value === "__all__" ? "" : value,
+                  ...(key === "department_id"
+                    ? { business_line_id: "", owner_id: "" }
+                    : key === "business_line_id"
+                      ? { owner_id: "" }
+                      : {}),
+                }))
+              }
             >
-              <SelectTrigger className="w-36" aria-label={key === "business_line" ? "业务线筛选" : "负责人筛选"}>
+              <SelectTrigger className="w-36" aria-label={`${label}筛选`}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="__all__">{key === "business_line" ? "全部业务线" : "全部负责人"}</SelectItem>
-                <SelectItem value="__none__">{key === "business_line" ? "业务线未归属" : "负责人未指派"}</SelectItem>
-                {responsibilityOptions[key === "business_line" ? "business_lines" : "assignees"].map((name) => (
-                  <SelectItem key={name} value={name}>
-                    {name}
+                <SelectItem value="__all__">全部{label}</SelectItem>
+                <SelectItem value="0">{empty}</SelectItem>
+                {items.map((item) => (
+                  <SelectItem key={item.id} value={String(item.id)}>
+                    {item.name}
+                    {!item.active && "（已停用）"}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -1092,26 +1143,9 @@ export default function FindingsPage() {
             {selectedIds.size > 0 && (
               <span className="text-muted-foreground text-xs tabular-nums">已选 {selectedIds.size} 条</span>
             )}
-            <FindingResponsibilityDialog
-              label="批量分配归属"
-              ids={[...selectedIds]}
-              disabled={recordingMilestone !== null}
-              onSaved={(business_line, assignee, updated) => {
-                const ids = new Set(updated);
-                setFindings((items) =>
-                  items.map((item) =>
-                    ids.has(item.finding_id ?? item.id) ? { ...item, business_line, assignee } : item,
-                  ),
-                );
-                setSelectedIds((current) => new Set([...current].filter((id) => !ids.has(id))));
-                void loadFlat();
-                if (view === "grouped") {
-                  void refreshGroups();
-                  setGroupFindings({});
-                }
-                if (view === "asset") void loadAssetTree();
-              }}
-            />
+            <Button size="sm" variant="outline" asChild>
+              <Link href="/settings/org?tab=assets">按资产划归</Link>
+            </Button>
             {BATCH_MILESTONES.map((action) => {
               const active = recordingMilestone === action.kind;
               return (

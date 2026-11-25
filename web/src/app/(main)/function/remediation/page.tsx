@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 
 import Link from "next/link";
 
-import { ArrowDown, ArrowUp, ArrowUpRight, ChevronDown, Download, RefreshCw, Settings2 } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, Download, RefreshCw, Settings2 } from "lucide-react";
 import { Bar, CartesianGrid, Cell, ComposedChart, Line, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
 
@@ -16,8 +16,8 @@ import {
   type FindingMetricTopic,
 } from "@/components/finding-metrics-guide";
 import { FindingMetricsScope } from "@/components/finding-metrics-scope";
+import { FindingOverduePanel } from "@/components/finding-overdue-panel";
 import { FindingReportsPanel } from "@/components/finding-reports-panel";
-import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -44,9 +44,10 @@ import {
   findingSeverityLabels,
   findingSLATotal,
   findingStageLabels,
+  GOVERNANCE_MOCK,
 } from "@/lib/finding-metrics";
 import { downloadGovernanceWorkbook } from "@/lib/governance-export";
-import { MOCK } from "@/lib/mock/enabled";
+import { type OrgDirectory, orgAPI } from "@/lib/org";
 
 const grades = ["critical", "high", "medium", "low"] as const;
 const severityColors = { critical: "#c63c4e", high: "#e58242", medium: "#d9ac3e", low: "#4f81ca" };
@@ -109,15 +110,16 @@ function MetricsDashboard({
   granularity,
   onGranularityChange,
   onExplain,
+  directory,
 }: {
   report: FindingMetricsReport;
+  directory?: OrgDirectory;
   previous?: FindingMetricsReport;
   granularity: string;
   onGranularityChange: (value: string) => void;
   onExplain: (topic: FindingGuideTopic) => void;
 }) {
   const { summary } = report;
-  const [showAllOverdue, setShowAllOverdue] = useState(false);
   const closure = report.durations.find((item) => item.key === "closure");
   const trend = groupTrend(report.trend, granularity);
   const conclusive = summary.retest_failed + summary.retest_passed;
@@ -231,11 +233,14 @@ function MetricsDashboard({
     .filter((item) => item.average_hours !== null)
     .sort((a, b) => (b.average_hours ?? 0) - (a.average_hours ?? 0))[0];
   const rework = report.durations.find((item) => item.key === "rework");
+  const missingDepartment = report.attribution_version
+    ? report.distribution.filter((item) => !item.department_id).reduce((sum, item) => sum + item.open, 0)
+    : 0;
   const missingBusiness = report.distribution
-    .filter((item) => !item.business_line)
+    .filter((item) => (report.attribution_version ? !item.business_line_id : !item.business_line))
     .reduce((sum, item) => sum + item.open, 0);
   const missingAssignee = report.distribution
-    .filter((item) => !item.assignee)
+    .filter((item) => (report.attribution_version ? !item.owner_id : !item.assignee))
     .reduce((sum, item) => sum + item.open, 0);
   return (
     <div className="space-y-5">
@@ -278,22 +283,40 @@ function MetricsDashboard({
           );
         })}
       </div>
-      {report.stock_known && (missingBusiness > 0 || missingAssignee > 0) && (
+      {((report.stock_known && (missingDepartment > 0 || missingBusiness > 0 || missingAssignee > 0)) ||
+        (report.data_quality && Object.values(report.data_quality).some((value) => value > 0))) && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-4 py-2 text-xs">
           <span className="flex items-center gap-1 font-medium">
             数据质量 <FindingMetricInfo topic="dataQuality" onOpen={onExplain} />
           </span>
-          {missingBusiness > 0 && (
-            <span>
+          {report.stock_known && missingDepartment > 0 && (
+            <Link href="/settings/org?tab=assets&asset_status=unassigned" className="hover:underline">
+              部门未归属 <strong>{missingDepartment}</strong>
+            </Link>
+          )}
+          {report.stock_known && missingBusiness > 0 && (
+            <Link href="/settings/org?tab=assets&asset_status=unassigned" className="hover:underline">
               业务线未归属 <strong className="tabular-nums">{missingBusiness}</strong>
-            </span>
+            </Link>
           )}
-          {missingAssignee > 0 && (
-            <span>
+          {report.stock_known && missingAssignee > 0 && (
+            <Link href="/settings/org?tab=people" className="hover:underline">
               负责人未指派 <strong className="tabular-nums">{missingAssignee}</strong>
-            </span>
+            </Link>
           )}
-          <span className="text-muted-foreground">仍纳入 SLA 计时</span>
+          {report.stock_known && (missingDepartment > 0 || missingBusiness > 0 || missingAssignee > 0) && (
+            <span className="text-muted-foreground">未归属不豁免 SLA</span>
+          )}
+          {!!report.data_quality?.unknown_attribution && (
+            <span>归属未知 {report.data_quality.unknown_attribution} 条记录</span>
+          )}
+          {!!report.data_quality?.missing_sla && <span>缺少 SLA {report.data_quality.missing_sla} 条记录</span>}
+          {!!report.data_quality?.missing_discovery && (
+            <span>缺少发现时间 {report.data_quality.missing_discovery} 条记录</span>
+          )}
+          {!!report.data_quality?.missing_snapshot_days && (
+            <span>缺少日快照 {report.data_quality.missing_snapshot_days} 天</span>
+          )}
         </div>
       )}
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.7fr)_minmax(300px,1fr)]">
@@ -479,81 +502,7 @@ function MetricsDashboard({
           </CardContent>
         </Card>
       </div>
-      <Card className="min-w-0">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-1">
-            逾期漏洞
-            <Badge variant="secondary" className="ml-1">
-              {report.stock_known ? summary.overdue : "—"}
-            </Badge>
-            <FindingMetricInfo topic="overdue" onOpen={onExplain} />
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Table className="min-w-[680px] table-fixed">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-[36%]">漏洞 / 编号</TableHead>
-                <TableHead className="w-20">等级</TableHead>
-                <TableHead>业务线 / 负责人</TableHead>
-                <TableHead className="w-24 text-right">存活</TableHead>
-                <TableHead className="w-24 text-right">逾期</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(showAllOverdue ? report.overdue : report.overdue.slice(0, 10)).map((item) => (
-                <TableRow key={item.id} className="hover:bg-muted/60">
-                  <TableCell className="max-w-80 whitespace-normal">
-                    {item.available ? (
-                      <Link className="hover:underline" href={`/function/findings/detail?id=${item.id}`}>
-                        {item.name}
-                        <ArrowUpRight className="ml-1 inline size-3" />
-                      </Link>
-                    ) : (
-                      item.name
-                    )}
-                    <span className="ml-2 inline-block text-muted-foreground text-xs">#{item.id}</span>
-                  </TableCell>
-                  <TableCell>
-                    <StatusBadge domain="severity" value={item.severity} />
-                  </TableCell>
-                  <TableCell className="max-w-48 whitespace-normal text-muted-foreground text-xs">
-                    {item.business_line || "业务线未归属"} / {item.assignee || "负责人未指派"}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">{Number(item.age_days.toFixed(1))} 天</TableCell>
-                  <TableCell className="text-right text-red-600 tabular-nums">
-                    +{Number(item.overdue_days.toFixed(1))} 天
-                  </TableCell>
-                </TableRow>
-              ))}
-              {!report.overdue.length && (
-                <TableRow>
-                  <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
-                    {report.stock_known ? "当前筛选下没有逾期漏洞" : "该日期暂无完整的存量快照"}
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-          {report.overdue.length > 10 && (
-            <div className="mt-3 flex justify-center">
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-expanded={showAllOverdue}
-                onClick={() => setShowAllOverdue(!showAllOverdue)}
-              >
-                {showAllOverdue ? "收起为前 10 条" : `查看全部（${report.overdue.length}）`}
-              </Button>
-            </div>
-          )}
-          {report.stock_known && report.overdue.length < summary.overdue && (
-            <p className="mt-2 text-muted-foreground text-xs">
-              旧快照仅保留 {report.overdue.length} 条明细，更新统计可加载全部 {summary.overdue} 条。
-            </p>
-          )}
-        </CardContent>
-      </Card>
+      <FindingOverduePanel report={report} directory={directory} onExplain={onExplain} />
       <div className="grid items-start gap-5 lg:grid-cols-2">
         <Card className="min-w-0">
           <CardHeader>
@@ -628,34 +577,34 @@ function MetricsDashboard({
                 <div>
                   <p className="text-muted-foreground text-xs">一次修复通过率</p>
                   <p className="mt-1 font-semibold text-xl tabular-nums">
-                    {report.quality_known ? percent(summary.first_retest_passed, summary.first_retest_total) : "—"}
+                    {percent(summary.first_retest_passed, summary.first_retest_total)}
                   </p>
                   <p className="mt-1 text-muted-foreground text-xs">
-                    {report.quality_known
-                      ? `${summary.first_retest_passed} / ${summary.first_retest_total}`
+                    {report.quality_known || summary.first_retest_total > 0
+                      ? `${summary.first_retest_passed} / ${summary.first_retest_total}${report.quality_known ? "" : " · 已记录样本"}`
                       : "尚无统计数据"}
                   </p>
                 </div>
                 <div>
                   <p className="text-muted-foreground text-xs">平均返工轮次</p>
                   <p className="mt-1 font-semibold text-xl tabular-nums">
-                    {report.quality_known && summary.verified_fixes
-                      ? `${(summary.rework_rounds / summary.verified_fixes).toFixed(2)} 轮`
-                      : "—"}
+                    {summary.verified_fixes ? `${(summary.rework_rounds / summary.verified_fixes).toFixed(2)} 轮` : "—"}
                   </p>
                   <p className="mt-1 text-muted-foreground text-xs">
-                    {report.quality_known
-                      ? `${summary.rework_rounds} 次返工 / ${summary.verified_fixes} 次修复`
+                    {report.quality_known || summary.verified_fixes > 0
+                      ? `${summary.rework_rounds} 次返工 / ${summary.verified_fixes} 次修复${report.quality_known ? "" : " · 已记录样本"}`
                       : "尚无统计数据"}
                   </p>
                 </div>
                 <div>
                   <p className="text-muted-foreground text-xs">平均返工耗时</p>
                   <p className="mt-1 font-semibold text-xl tabular-nums">
-                    {report.quality_known ? findingMetricDuration(rework?.average_hours ?? null) : "—"}
+                    {findingMetricDuration(rework?.average_hours ?? null)}
                   </p>
                   <p className="mt-1 text-muted-foreground text-xs">
-                    {report.quality_known ? `${rework?.count ?? 0} 个已完成返工周期` : "尚无统计数据"}
+                    {report.quality_known || (rework?.count ?? 0) > 0
+                      ? `${rework?.count ?? 0} 个已完成返工周期${report.quality_known ? "" : " · 已记录样本"}`
+                      : "尚无统计数据"}
                   </p>
                 </div>
               </div>
@@ -805,10 +754,35 @@ export default function RemediationPage() {
     const q = new URLSearchParams(window.location.search);
     setFilter({
       ...emptyFindingFilter,
+      department_id: q.has("department_id") ? Number(q.get("department_id")) : undefined,
+      business_line_id: q.has("business_line_id") ? Number(q.get("business_line_id")) : undefined,
+      owner_id: q.has("owner_id") ? Number(q.get("owner_id")) : undefined,
       business_line: q.get("business_line") ?? "",
       assignee: q.get("assignee") ?? "",
     });
-    api.findingResponsibilityOptions().then(setScopeOptions, () => toast.error("读取归属筛选失败"));
+    if (GOVERNANCE_MOCK)
+      api.findingResponsibilityOptions().then(setScopeOptions, () => toast.error("读取归属筛选失败"));
+    else
+      orgAPI.directory().then(
+        (directory) => setScopeOptions({ business_lines: [], assignees: [], directory }),
+        () => toast.error("读取组织筛选失败"),
+      );
+  }, []);
+  useEffect(() => {
+    const update = () => {
+      setRevision((value) => value + 1);
+      if (!GOVERNANCE_MOCK)
+        void orgAPI
+          .directory()
+          .then((directory) => setScopeOptions({ business_lines: [], assignees: [], directory }))
+          .catch(() => toast.error("读取组织筛选失败"));
+    };
+    window.addEventListener("org-statistics-refreshed", update);
+    window.addEventListener("focus", update);
+    return () => {
+      window.removeEventListener("org-statistics-refreshed", update);
+      window.removeEventListener("focus", update);
+    };
   }, []);
   // biome-ignore lint/correctness/useExhaustiveDependencies: revision reloads snapshots after an explicit refresh.
   useEffect(() => {
@@ -821,8 +795,8 @@ export default function RemediationPage() {
     const priorFrom = new Date(start - days * 86400000).toISOString().slice(0, 10);
     const priorTo = new Date(start - 86400000).toISOString().slice(0, 10);
     Promise.all([
-      api.findingMetrics(range.from, range.to, filter.severity, filter.business_line, filter.assignee),
-      api.findingMetrics(priorFrom, priorTo, filter.severity, filter.business_line, filter.assignee),
+      api.findingMetrics(range.from, range.to, filter),
+      api.findingMetrics(priorFrom, priorTo, filter),
     ]).then(
       ([current, previous]) => {
         if (active)
@@ -838,7 +812,7 @@ export default function RemediationPage() {
     return () => {
       active = false;
     };
-  }, [range.from, range.to, filter.severity, filter.business_line, filter.assignee, validRange, revision]);
+  }, [range.from, range.to, filter, validRange, revision]);
 
   async function refresh() {
     setRefreshing(true);
@@ -871,7 +845,7 @@ export default function RemediationPage() {
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="font-semibold text-2xl tracking-tight">漏洞治理</h1>
-            {MOCK && <Badge variant="secondary">示例数据</Badge>}
+            {GOVERNANCE_MOCK && <Badge variant="secondary">示例数据</Badge>}
             {section === "metrics" && report?.generated_at && (
               <span className="text-muted-foreground text-xs">
                 更新于 {new Date(report.generated_at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}
@@ -889,14 +863,29 @@ export default function RemediationPage() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuItem onSelect={() => downloadGovernanceWorkbook(report, range.from, range.to, filter)}>
+                  <DropdownMenuItem
+                    onSelect={() =>
+                      downloadGovernanceWorkbook(
+                        report,
+                        range.from,
+                        range.to,
+                        filter,
+                        undefined,
+                        scopeOptions.directory,
+                      )
+                    }
+                  >
                     导出 Excel
                   </DropdownMenuItem>
                   <DropdownMenuItem asChild>
                     <Link
                       target="_blank"
                       rel="noreferrer"
-                      href={`/remediation-report?${new URLSearchParams({ ...range, ...filter })}`}
+                      href={`/remediation-report?${new URLSearchParams(
+                        Object.entries({ ...range, ...filter })
+                          .filter(([, value]) => value !== undefined && value !== null)
+                          .map(([key, value]) => [key, String(value)]),
+                      )}`}
                     >
                       PDF / 打印
                     </Link>
@@ -921,8 +910,8 @@ export default function RemediationPage() {
             )}
           </div>
         </header>
-        <a href="/system/responsibility" className="ml-auto text-muted-foreground text-xs hover:underline">
-          配置业务线与负责人 ↗
+        <a href="/settings/org" className="ml-auto text-muted-foreground text-xs hover:underline">
+          配置部门与负责人 ↗
         </a>
         <Tabs value={section} onValueChange={setSection}>
           <TabsList>
@@ -979,7 +968,24 @@ export default function RemediationPage() {
                   {range.from} — {range.to}
                 </span>
               )}
-              <FindingMetricsScope filter={filter} options={scopeOptions} onChange={setFilter} />
+              <FindingMetricsScope
+                filter={filter}
+                options={{
+                  ...scopeOptions,
+                  historical_line_ids: report?.filter_options?.business_line_ids,
+                  historical_owner_ids: report?.filter_options?.owner_ids,
+                }}
+                onChange={(value) => {
+                  setFilter(value);
+                  const url = new URL(window.location.href);
+                  for (const key of ["department_id", "business_line_id", "owner_id", "severity"] as const) {
+                    if (value[key] !== undefined && value[key] !== null && value[key] !== "")
+                      url.searchParams.set(key, String(value[key]));
+                    else url.searchParams.delete(key);
+                  }
+                  window.history.replaceState(null, "", url);
+                }}
+              />
             </div>
             {!validRange && (
               <p role="alert" className="text-destructive text-sm">
@@ -1002,6 +1008,7 @@ export default function RemediationPage() {
               (report.generated_at ? (
                 <MetricsDashboard
                   report={report}
+                  directory={scopeOptions.directory}
                   previous={data?.previous}
                   granularity={granularity}
                   onGranularityChange={setGranularity}

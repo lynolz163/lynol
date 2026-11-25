@@ -6,11 +6,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/internal/org"
+	"github.com/google/uuid"
 )
 
 func TestFindingReportFullSLAAndQuality(t *testing.T) {
@@ -28,12 +31,15 @@ func TestFindingReportFullSLAAndQuality(t *testing.T) {
 	report.Current.StockKnown = false
 	report.Current.QualityKnown = false
 	content = strings.Join(findingReportContent(report).Lines, "\n")
-	if strings.Contains(content, "全量达标率 41.4%") || strings.Contains(content, "平均返工 0.30") {
+	if strings.Contains(content, "全量达标率 41.4%") || !strings.Contains(content, "平均返工 0.30") || !strings.Contains(content, "已记录样本") {
 		t.Fatalf("unknown stock/quality rendered as measured: %s", content)
 	}
 }
 
 func TestGovernanceReportEndToEnd(t *testing.T) {
+	if os.Getenv("ARTEX_PG_DSN") == "" {
+		t.Skip("ARTEX_PG_DSN is required; no implicit production database")
+	}
 	f := newNotifyFixture(t)
 	var body string
 	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -48,13 +54,29 @@ func TestGovernanceReportEndToEnd(t *testing.T) {
 	if bad.Code != 400 {
 		t.Fatalf("enabled without destination: %d", bad.Code)
 	}
-	schedule := fmt.Sprintf(`{"kind":"weekly","enabled":true,"weekday":1,"monthday":1,"hour":9,"minute":0,"channel_id":%d,"filter":{"severity":"","business_line":"test-scope","assignee":""}}`, channelID)
+	change := func(kind string, id, revision int64, data any) org.ChangeResult {
+		t.Helper()
+		raw, _ := json.Marshal(data)
+		result, err := org.New(f.pg.DB).Change(t.Context(), org.Command{Kind: kind, Action: "save", ID: id, Revision: revision, Data: raw, Scope: "all_open", ConfirmImpact: true, IdempotencyKey: uuid.NewString()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	department := org.Department{Name: "端到端部门-" + uuid.NewString(), Code: uuid.NewString(), Active: true, ChannelIDs: []int64{channelID}}
+	created := change("department", 0, 0, department)
+	department.ID = created.EntityID
+	department.Revision = 1
+	person := change("person", 0, 0, org.Person{Name: "端到端负责人", Email: uuid.NewString() + "@example.invalid", DepartmentID: &department.ID, Active: true})
+	department.HeadID = &person.EntityID
+	change("department", department.ID, department.Revision, department)
+	schedule := fmt.Sprintf(`{"kind":"weekly","enabled":true,"weekday":1,"monthday":1,"hour":9,"minute":0,"scope_mode":"departments","department_ids":[%d],"filter":{"severity":""}}`, department.ID)
 	saved := f.request("PUT", "/api/exploration/finding-report-schedules", schedule)
 	if saved.Code != 200 {
 		t.Fatalf("save schedule: %d %s", saved.Code, saved.Body.String())
 	}
 	t.Cleanup(func() {
-		f.pg.Exec(`UPDATE finding_report_schedules SET enabled=false,channel_id=NULL WHERE kind='weekly'`)
+		f.pg.Exec(`UPDATE finding_report_schedules SET enabled=false,channel_id=NULL,org_department_ids='{}',org_scope_mode='legacy' WHERE kind='weekly'`)
 	})
 	monday := time.Date(2026, 11, 23, 9, 0, 0, 0, db.FindingMetricsLocation)
 	for range 2 {
@@ -63,7 +85,7 @@ func TestGovernanceReportEndToEnd(t *testing.T) {
 		}
 	}
 	var id, eventID int64
-	if err := f.pg.QueryRow(`SELECT id,event_id FROM finding_reports WHERE kind='weekly' AND period_start='2026-11-16' AND filter->>'business_line'='test-scope'`).Scan(&id, &eventID); err != nil {
+	if err := f.pg.QueryRow(`SELECT id,event_id FROM finding_reports WHERE kind='weekly' AND period_start='2026-11-16' AND attribution_version=1 AND department_id=$1 AND (filter->>'department_id')::bigint=$1`, department.ID).Scan(&id, &eventID); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { f.pg.Exec(`DELETE FROM finding_reports WHERE id=$1`, id) })

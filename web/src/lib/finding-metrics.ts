@@ -1,8 +1,21 @@
+import type { OrgDirectory } from "./org";
 import type { Severity } from "./types";
+
+export const GOVERNANCE_MOCK =
+  process.env.NEXT_PUBLIC_MOCK === "1" && process.env.NEXT_PUBLIC_GOVERNANCE_REAL_API !== "1";
 
 export type FindingSLA = Record<Severity, number>;
 
 export interface FindingHistoryEvent {
+  recorded_at?: string;
+  asset_id?: number | null;
+  department_id?: number | null;
+  business_line_id?: number | null;
+  owner_id?: number | null;
+  attribution_version?: number;
+  attribution_quality?: string;
+  owner_resolution?: string;
+  sla_days?: number | null;
   id: number;
   finding_id: string;
   kind: string;
@@ -24,6 +37,10 @@ export interface FindingHistoryEvent {
 }
 
 export interface FindingMetricBucket {
+  department_id?: number | null;
+  business_line_id?: number | null;
+  owner_id?: number | null;
+  department?: string;
   business_line: string;
   assignee: string;
   severity: string;
@@ -55,6 +72,15 @@ export interface FindingMetricTrend {
 }
 
 export interface FindingMetricsReport {
+  attribution_version?: number;
+  snapshot_ids?: number[];
+  data_quality?: {
+    unknown_attribution: number;
+    missing_sla: number;
+    missing_discovery: number;
+    missing_snapshot_days: number;
+  };
+  filter_options?: { business_line_ids: number[]; owner_ids: number[] };
   has_custom_sla?: boolean;
   groups: FindingMetricGroup[];
   generated_at: string | null;
@@ -66,6 +92,10 @@ export interface FindingMetricsReport {
   durations: { key: string; count: number; average_hours: number | null; p90_hours: number | null }[];
   distribution: FindingMetricBucket[];
   overdue: {
+    department_id?: number | null;
+    business_line_id?: number | null;
+    owner_id?: number | null;
+    department?: string;
     business_line: string;
     assignee: string;
     id: string;
@@ -104,12 +134,17 @@ export function findingMetricDuration(hours: number | null) {
 }
 
 export interface FindingMetricsFilter {
+  department_id?: number | null;
+  business_line_id?: number | null;
+  owner_id?: number | null;
   severity: string;
   business_line: string;
   assignee: string;
 }
 export interface FindingMetricGroup {
-  dimension: "business_line" | "assignee";
+  dimension: "department" | "business_line" | "assignee";
+  id?: number | null;
+  active?: boolean;
   name: string;
   open: number;
   overdue: number;
@@ -120,6 +155,8 @@ export interface FindingMetricGroup {
   p90_hours: number | null;
 }
 export interface FindingReportSchedule {
+  department_ids?: number[];
+  scope_mode?: "departments";
   kind: "weekly" | "monthly";
   enabled: boolean;
   weekday: number;
@@ -130,6 +167,19 @@ export interface FindingReportSchedule {
   filter: FindingMetricsFilter;
 }
 export interface SavedFindingReport {
+  attribution_version?: number;
+  attribution_basis?: string;
+  department_id?: number | null;
+  source_snapshot_ids?: number[];
+  delivery_context?: {
+    state: "ready" | "unavailable" | "queued";
+    department_id: number;
+    head_id: number | null;
+    head_name: string;
+    head_email: string;
+    channel_ids: number[];
+    message: string;
+  };
   id: number;
   kind: "weekly" | "monthly";
   from: string;
@@ -143,11 +193,17 @@ export interface SavedFindingReport {
   delivery_id: number | null;
 }
 export interface FindingResponsibilityOptions {
+  directory?: OrgDirectory;
+  historical_owner_ids?: number[];
+  historical_line_ids?: number[];
   business_lines: string[];
   assignees: string[];
 }
 export const emptyFindingFilter: FindingMetricsFilter = { severity: "", business_line: "", assignee: "" };
 export const findingDeliveryLabels: Record<string, string> = {
+  unavailable: "未配置投递",
+  ready: "可投递",
+  queued: "等待推送",
   generated: "已生成",
   pending: "等待推送",
   sending: "正在推送",

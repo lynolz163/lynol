@@ -6,6 +6,7 @@ import {
   findingSLATotal,
   findingStageLabels,
 } from "./finding-metrics";
+import type { OrgDirectory } from "./org";
 
 type Cell = string | number;
 export interface GovernanceSheet {
@@ -13,16 +14,42 @@ export interface GovernanceSheet {
   rows: Cell[][];
 }
 
-export function findingFilterLabel(filter: FindingMetricsFilter) {
+export function findingOrganizationName(
+  kind: "department" | "business_line" | "assignee",
+  id: number | null | undefined,
+  fallback: string,
+  directory?: OrgDirectory,
+) {
+  if (id === undefined) return fallback;
+  const names = { department: "部门", business_line: "业务线", assignee: "负责人" };
+  if (!id) return kind === "assignee" ? "负责人未指派" : `${names[kind]}未归属`;
+  const items =
+    kind === "department"
+      ? directory?.departments
+      : kind === "business_line"
+        ? directory?.business_lines
+        : directory?.people;
+  const entity = items?.find((item) => item.id === id);
+  if (entity) return `${entity.name}${entity.active ? "" : "（已停用）"}`;
+  return fallback || `${names[kind]} #${id}`;
+}
+
+export function findingFilterLabel(filter: FindingMetricsFilter, directory?: OrgDirectory) {
   const parts: string[] = [];
   if (filter.severity)
     parts.push(
       `等级：${findingSeverityLabels[filter.severity as keyof typeof findingSeverityLabels] ?? filter.severity}`,
     );
-  if (filter.business_line)
+  if (filter.department_id != null)
+    parts.push(`部门：${findingOrganizationName("department", filter.department_id, "", directory)}`);
+  if (filter.business_line_id != null)
+    parts.push(`业务线：${findingOrganizationName("business_line", filter.business_line_id, "", directory)}`);
+  else if (filter.business_line)
     parts.push(`业务线：${filter.business_line === "__none__" ? "业务线未归属" : filter.business_line}`);
-  if (filter.assignee) parts.push(`负责人：${filter.assignee === "__none__" ? "负责人未指派" : filter.assignee}`);
-  return parts.join(" · ") || "全部等级、业务线与负责人";
+  if (filter.owner_id != null)
+    parts.push(`负责人：${findingOrganizationName("assignee", filter.owner_id, "", directory)}`);
+  else if (filter.assignee) parts.push(`负责人：${filter.assignee === "__none__" ? "负责人未指派" : filter.assignee}`);
+  return parts.join(" · ") || "全部等级、部门、业务线与负责人";
 }
 
 export function governanceSheets(
@@ -31,6 +58,7 @@ export function governanceSheets(
   to: string,
   filter: FindingMetricsFilter,
   previous?: FindingMetricsReport,
+  directory?: OrgDirectory,
 ): GovernanceSheet[] {
   const s = report.summary;
   const percent = (met: number, total: number) => (total ? `${((met / total) * 100).toFixed(1)}%` : "无有效样本");
@@ -41,7 +69,7 @@ export function governanceSheets(
         ["指标", "本期", "上期"],
         ["统计开始", from, ""],
         ["统计结束", to, ""],
-        ["筛选范围", findingFilterLabel(filter), ""],
+        ["筛选范围", findingFilterLabel(filter, directory), ""],
         ["新增漏洞", s.new, previous?.summary.new ?? "—"],
         ["关闭次数", s.closed, previous?.summary.closed ?? "—"],
         ["重开次数", s.reopened, previous?.summary.reopened ?? "—"],
@@ -66,22 +94,20 @@ export function governanceSheets(
         ["复测通过 / 不通过 / 其他", `${s.retest_passed} / ${s.retest_failed} / ${s.retest_other}`, ""],
         [
           "一次修复通过率",
-          report.quality_known ? percent(s.first_retest_passed, s.first_retest_total) : "无统计数据",
+          s.first_retest_total > 0 ? percent(s.first_retest_passed, s.first_retest_total) : "无统计数据",
           "",
         ],
         [
           "首次复测通过 / 首次明确结论",
-          report.quality_known ? `${s.first_retest_passed} / ${s.first_retest_total}` : "无统计数据",
+          report.quality_known || s.first_retest_total > 0
+            ? `${s.first_retest_passed} / ${s.first_retest_total}`
+            : "无统计数据",
           "",
         ],
-        [
-          "平均返工轮次",
-          report.quality_known && s.verified_fixes ? (s.rework_rounds / s.verified_fixes).toFixed(2) : "无统计数据",
-          "",
-        ],
+        ["平均返工轮次", s.verified_fixes ? (s.rework_rounds / s.verified_fixes).toFixed(2) : "无统计数据", ""],
         [
           "返工轮次 / 复测确认修复周期",
-          report.quality_known ? `${s.rework_rounds} / ${s.verified_fixes}` : "无统计数据",
+          report.quality_known || s.verified_fixes > 0 ? `${s.rework_rounds} / ${s.verified_fixes}` : "无统计数据",
           "",
         ],
         ["账龄：不足 7 天", report.stock_known ? s.ages[0] : "未知", ""],
@@ -123,7 +149,7 @@ export function governanceSheets(
       ],
     },
     {
-      name: "业务线与负责人",
+      name: "部门、业务线与负责人",
       rows: [
         [
           "维度",
@@ -139,8 +165,16 @@ export function governanceSheets(
           "P90 小时",
         ],
         ...report.groups.map((row) => [
-          row.dimension === "business_line" ? "业务线" : "负责人 / 团队",
-          row.name || (row.dimension === "business_line" ? "业务线未归属" : "负责人未指派"),
+          { department: "部门", business_line: "业务线", assignee: "负责人" }[row.dimension],
+          findingOrganizationName(
+            row.dimension,
+            report.attribution_version ? row.id : undefined,
+            row.name ||
+              (row.dimension === "assignee"
+                ? "负责人未指派"
+                : `${row.dimension === "department" ? "部门" : "业务线"}未归属`),
+            directory,
+          ),
           report.stock_known ? row.open : "未知",
           report.stock_known ? row.overdue : "未知",
           report.stock_known ? percent(row.overdue, row.open) : "未知",
@@ -156,13 +190,26 @@ export function governanceSheets(
     {
       name: "逾期漏洞",
       rows: [
-        ["漏洞 ID", "漏洞名称", "等级", "业务线", "负责人", "存活天数", "逾期天数"],
+        ["漏洞 ID", "漏洞名称", "等级", "部门", "业务线", "负责人", "存活天数", "逾期天数"],
         ...report.overdue.map((row) => [
           row.id,
           row.name,
           findingSeverityLabels[row.severity as keyof typeof findingSeverityLabels] ?? row.severity,
-          row.business_line || "业务线未归属",
-          row.assignee || "负责人未指派",
+          report.attribution_version
+            ? findingOrganizationName("department", row.department_id, row.department || "部门未归属", directory)
+            : "未记录",
+          findingOrganizationName(
+            "business_line",
+            report.attribution_version ? row.business_line_id : undefined,
+            row.business_line || "业务线未归属",
+            directory,
+          ),
+          findingOrganizationName(
+            "assignee",
+            report.attribution_version ? row.owner_id : undefined,
+            row.assignee || "负责人未指派",
+            directory,
+          ),
           row.age_days,
           row.overdue_days,
         ]),
@@ -172,6 +219,12 @@ export function governanceSheets(
       name: "统计口径",
       rows: [
         ["项目", "说明"],
+        [
+          "修复质量覆盖",
+          report.quality_known
+            ? "按已记录的完整复测链统计"
+            : "已知计数按已记录样本展示；缺失记录不补为 0，不推断未记录的周期",
+        ],
         ["时区", "Asia/Shanghai（北京时间），自然日计时"],
         ["历史采集开始", report.history_since ?? "未知"],
         [
@@ -329,8 +382,9 @@ export function downloadGovernanceWorkbook(
   to: string,
   filter: FindingMetricsFilter,
   previous?: FindingMetricsReport,
+  directory?: OrgDirectory,
 ) {
-  const bytes = governanceWorkbook(governanceSheets(report, from, to, filter, previous));
+  const bytes = governanceWorkbook(governanceSheets(report, from, to, filter, previous, directory));
   const blob = new Blob([bytes as Uint8Array<ArrayBuffer>], {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   });

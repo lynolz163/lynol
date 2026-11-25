@@ -115,10 +115,12 @@ function getToken(): string | null {
 }
 
 export async function http<T>(path: string, init?: RequestInit): Promise<T> {
-  if (MOCK) return mockHandle<T>(init?.method ?? "GET", path, init?.body ?? null);
+  const realGovernance = process.env.NEXT_PUBLIC_GOVERNANCE_REAL_API === "1" && /^\/exploration\/(findings|finding-groups|finding-asset-tree|responsibility|responsibility-options|finding-reports|finding-report-schedules)([/?]|$)/.test(path);
+  if (MOCK && !realGovernance) return mockHandle<T>(init?.method ?? "GET", path, init?.body ?? null);
   const token = getToken();
   const r = await fetch(`/api${path}`, {
     ...init,
+    signal: init?.signal ?? (realGovernance ? AbortSignal.timeout(30_000) : undefined),
     headers: {
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -218,6 +220,9 @@ const tq = (task?: string, sep: "?" | "&" = "?") => (task ? `${sep}task=${encode
 // 资产树 / 导出共用同一份,新增筛选项只改这里(后端也只解析这一份)。
 function findingFilterParams(q: Omit<FindingQuery, "page" | "pageSize">): URLSearchParams {
   const p = new URLSearchParams();
+  for (const key of ["department_id", "business_line_id", "owner_id"] as const) {
+    if (q[key] !== undefined && q[key] !== "") p.set(key, String(q[key]));
+  }
   if (q.severity && q.severity !== "all") p.set("severity", q.severity);
   if (q.status && q.status !== "all") p.set("status", q.status);
   if (q.vulnclass && q.vulnclass !== "all") p.set("vulnclass", q.vulnclass);
@@ -550,10 +555,18 @@ export const api = {
   // ---- exploration (per task) ----
   frontier: (task?: string) => get<TaskNode[]>(`/exploration/frontier${tq(task)}`).then(arr),
   findings: (task?: string) => get<Finding[]>(`/exploration/findings${tq(task)}`).then(arr),
-  findingMetrics: (from: string, to: string, severity: string, business_line = "", assignee = "") =>
-    get<FindingMetricsReport>(
-      `/exploration/findings/metrics?${new URLSearchParams({ from, to, severity, business_line, assignee })}`,
-    ),
+  findingMetrics: (from: string, to: string, filter: FindingMetricsFilter) => {
+    const params = new URLSearchParams({ from, to, severity: filter.severity });
+    if (MOCK && process.env.NEXT_PUBLIC_GOVERNANCE_REAL_API !== "1") {
+      params.set("business_line", filter.business_line);
+      params.set("assignee", filter.assignee);
+    } else {
+      for (const key of ["department_id", "business_line_id", "owner_id"] as const) {
+        if (filter[key] !== undefined && filter[key] !== null) params.set(key, String(filter[key]));
+      }
+    }
+    return get<FindingMetricsReport>(`/exploration/findings/metrics?${params}`);
+  },
   findingResponsibilityOptions: () => get<FindingResponsibilityOptions>("/exploration/findings/responsibility-options"),
   setFindingResponsibility: (finding_ids: string[], business_line: string, assignee: string) =>
     http<{ updated: string[] }>("/exploration/findings/responsibility", {

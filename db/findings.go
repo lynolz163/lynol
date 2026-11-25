@@ -15,6 +15,7 @@ import (
 // DBFinding is a row in the standalone findings table. It persists across task
 // deletion unless the caller explicitly requests related finding cleanup.
 type DBFinding struct {
+	OrgAttribution        json.RawMessage `json:"org_attribution"`
 	TrafficCount          int
 	EvidenceVersion       int64
 	ReportEvidenceVersion int64
@@ -115,7 +116,17 @@ const findingSelectCols = `f.id, f.task_id, f.node_id, f.vulnclass, COALESCE(f.n
 	       f.evidence, f.worker, f.asset_ids, COALESCE(f.status, 'pending'), f.created_at,
 	       COALESCE(t.description, '') AS task_description, f.evidence_version, f.report_evidence_version,
  (SELECT count(*) FROM finding_traffic_bindings b WHERE b.finding_id=f.id), f.dispatched_at, f.developer_fixed_at,
- f.business_line, f.assignee, f.business_line_id, f.assignee_id`
+ f.business_line, f.assignee, f.business_line_id, f.assignee_id,
+ (SELECT jsonb_build_object('asset_id',r.asset_id,'asset_identifier',g.identifier,
+ 'department_id',r.department_id,'department_name',d.name,'department_active',d.active,
+ 'business_line_id',r.business_line_id,'business_line_name',b.name,'business_line_active',b.active,
+ 'owner_id',r.owner_id,'owner_name',p.name,'owner_active',p.active,
+ 'owner_resolution',r.owner_resolution,'attribution_quality',r.attribution_quality)
+ FROM org.resolve_finding_owner(f.id,statement_timestamp()) r
+ LEFT JOIN org.asset_registry g ON g.asset_id=r.asset_id
+ LEFT JOIN org.department d ON d.id=r.department_id
+ LEFT JOIN org.business_line b ON b.id=r.business_line_id
+ LEFT JOIN org.app_user p ON p.id=r.owner_id)`
 
 // scanFindings materializes rows selected via findingSelectCols.
 func scanFindings(rows interface {
@@ -130,7 +141,7 @@ func scanFindings(rows interface {
 		if err := rows.Scan(&f.ID, &f.TaskID, &f.NodeID, &f.VulnClass, &f.Name, &f.Severity,
 			&f.Summary, &f.Evidence, &f.Worker, &aidsJSON, &f.Status, &f.CreatedAt,
 			&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.TrafficCount,
-			&f.DispatchedAt, &f.DeveloperFixedAt, &f.BusinessLine, &f.Assignee, &f.BusinessLineID, &f.AssigneeID); err != nil {
+			&f.DispatchedAt, &f.DeveloperFixedAt, &f.BusinessLine, &f.Assignee, &f.BusinessLineID, &f.AssigneeID, &f.OrgAttribution); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(aidsJSON), &f.AssetIDs)
@@ -162,15 +173,18 @@ func (d *DB) ListFindings(limit int) ([]*DBFinding, error) {
 // filter on that column". Sort is "severity" (severity desc, then newest) or
 // anything else (newest first).
 type FindingFilter struct {
-	BusinessLine string
-	Assignee     string
-	ActiveOnly   bool
-	Severity     string // high | medium | low
-	Status       string // pending | false_positive | ignored | resolved
-	VulnClass    string
-	TaskID       string // 任务 id(字符串形式;空/非法 = 不按任务筛选)
-	Query        string // 名称/类型/摘要/证据/报告正文的模糊检索关键词
-	Sort         string // "severity" | "time"
+	DepartmentID      *int64
+	OrgBusinessLineID *int64
+	OwnerID           *int64
+	BusinessLine      string
+	Assignee          string
+	ActiveOnly        bool
+	Severity          string // high | medium | low
+	Status            string // pending | false_positive | ignored | resolved
+	VulnClass         string
+	TaskID            string // 任务 id(字符串形式;空/非法 = 不按任务筛选)
+	Query             string // 名称/类型/摘要/证据/报告正文的模糊检索关键词
+	Sort              string // "severity" | "time"
 	// AssetScope 是资产树的节点 key(a:<id> / c:<id> / r:<domain> / __none__),
 	// 选中一个节点等于选中它的整棵子树。空 = 不按资产筛选。
 	AssetScope string
@@ -198,6 +212,21 @@ func (f FindingFilter) where() (string, []any) {
 		}
 		args = append(args, val)
 		conds = append(conds, fmt.Sprintf("f.%s = $%d", col, len(args)))
+	}
+	var orgConds []string
+	for _, dimension := range []struct {
+		column string
+		value  *int64
+	}{
+		{"department_id", f.DepartmentID}, {"business_line_id", f.OrgBusinessLineID}, {"owner_id", f.OwnerID},
+	} {
+		if dimension.value != nil {
+			args = append(args, *dimension.value)
+			orgConds = append(orgConds, fmt.Sprintf("COALESCE(r.%s,0)=$%d", dimension.column, len(args)))
+		}
+	}
+	if len(orgConds) > 0 {
+		conds = append(conds, "EXISTS(SELECT 1 FROM org.resolve_finding_owner(f.id,statement_timestamp()) r WHERE "+strings.Join(orgConds, " AND ")+")")
 	}
 	add("severity", f.Severity)
 	if f.ActiveOnly {
@@ -538,7 +567,7 @@ func (d *DB) ListFindingsForExport(f FindingFilter, ids []int64) ([]*DBFinding, 
 		if err := rows.Scan(&f.ID, &f.TaskID, &f.NodeID, &f.VulnClass, &f.Name, &f.Severity,
 			&f.Summary, &f.Evidence, &f.Worker, &aidsJSON, &f.Status, &f.CreatedAt,
 			&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.TrafficCount,
-			&f.DispatchedAt, &f.DeveloperFixedAt, &f.BusinessLine, &f.Assignee, &f.BusinessLineID, &f.AssigneeID, &f.Report); err != nil {
+			&f.DispatchedAt, &f.DeveloperFixedAt, &f.BusinessLine, &f.Assignee, &f.BusinessLineID, &f.AssigneeID, &f.OrgAttribution, &f.Report); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(aidsJSON), &f.AssetIDs)
@@ -677,7 +706,7 @@ func (d *DB) GetFinding(id int64) (*DBFinding, error) {
 		&f.ID, &f.TaskID, &f.NodeID, &f.VulnClass, &f.Name, &f.Severity,
 		&f.Summary, &f.Evidence, &f.Worker, &aidsJSON, &f.Status, &f.CreatedAt,
 		&f.TaskDescription, &f.EvidenceVersion, &f.ReportEvidenceVersion, &f.TrafficCount,
-		&f.DispatchedAt, &f.DeveloperFixedAt, &f.BusinessLine, &f.Assignee, &f.BusinessLineID, &f.AssigneeID, &f.Report, &f.RetestRequestedAt, &f.VerifiedFixedAt)
+		&f.DispatchedAt, &f.DeveloperFixedAt, &f.BusinessLine, &f.Assignee, &f.BusinessLineID, &f.AssigneeID, &f.OrgAttribution, &f.Report, &f.RetestRequestedAt, &f.VerifiedFixedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

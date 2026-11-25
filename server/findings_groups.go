@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -28,7 +29,19 @@ func findingPaginationParam(raw string, fallback, upperBound int) int {
 // findingFilterFromQuery builds the shared findings filter from a request's
 // query string. 列表 / 分组 / 资产树 / 导出走同一份解析,新增筛选项只改这里。
 func findingFilterFromQuery(q url.Values) db.FindingFilter {
+	id := func(key string) *int64 {
+		raw := q.Get(key)
+		if raw == "" {
+			return nil
+		}
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || value < 0 {
+			value = -1
+		} // Invalid ID matches no organization, never broadens the filter.
+		return &value
+	}
 	return db.FindingFilter{
+		DepartmentID: id("department_id"), OrgBusinessLineID: id("business_line_id"), OwnerID: id("owner_id"),
 		BusinessLine: q.Get("business_line"), Assignee: q.Get("assignee"), ActiveOnly: q.Get("active_only") == "true",
 		Severity:  normFilter(q.Get("severity")),
 		Status:    normFilter(q.Get("status")),

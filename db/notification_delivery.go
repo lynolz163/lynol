@@ -65,7 +65,7 @@ const notificationDeliveryCols = `d.id, d.event_id, d.channel_id, d.state, d.att
 // 渲染一条消息三者缺一不可，分开查会写出三次往返。
 const joinedDeliveryQuery = `SELECT ` + notificationDeliveryCols + `,
        e.snapshot, e.kind, e.finding_id,
-       c.id, c.name, c.kind, c.enabled, c.config, c.mode, c.filter, c.rate_per_min
+       c.id, c.name, c.kind, c.enabled, c.config, c.mode, c.filter, c.rate_per_min, c.org_managed
 FROM notification_deliveries d
 JOIN notification_events e ON e.id = d.event_id
 JOIN notification_channels c ON c.id = d.channel_id`
@@ -84,7 +84,7 @@ func scanNotificationDelivery(sc interface{ Scan(...any) error }) (*Notification
 	if err := sc.Scan(&dl.ID, &dl.EventID, &dl.ChannelID, &dl.State, &dl.Attempts, &dl.NextAttemptAt,
 		&lastErr, &batchID, &dl.CreatedAt, &sentAt,
 		&snapshot, &eventKind, &dl.FindingID,
-		&channel.ID, &channel.Name, &channel.Kind, &chEnabled, &channel.Config, &channel.Mode, &channel.Filter, &channel.RatePerMin); err != nil {
+		&channel.ID, &channel.Name, &channel.Kind, &chEnabled, &channel.Config, &channel.Mode, &channel.Filter, &channel.RatePerMin, &channel.OrgManaged); err != nil {
 		return nil, err
 	}
 	dl.LastError = lastErr.String

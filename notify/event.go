@@ -71,7 +71,9 @@ type Message struct {
 }
 
 type ReportContent struct {
-	ID    int64    `json:"id"`
-	Title string   `json:"title"`
-	Lines []string `json:"lines"`
+	DepartmentID   int64    `json:"department_id,omitempty"`
+	BusinessLineID *int64   `json:"business_line_id,omitempty"`
+	ID             int64    `json:"id"`
+	Title          string   `json:"title"`
+	Lines          []string `json:"lines"`
 }

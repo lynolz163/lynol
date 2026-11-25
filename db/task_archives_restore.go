@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Autumn-27/artex/internal/org"
 )
 
 // CompleteTaskArchive performs the hot-store compaction only after the external
@@ -448,6 +451,8 @@ func insertArchiveJSONSequenceRows(tx *sql.Tx, table string, reader io.Reader) (
 }
 
 func restoreArchiveAssets(tx *sql.Tx, taskID int64, raw json.RawMessage) (map[int64]int64, []string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	rows, err := decodeArchiveRows(raw)
 	if err != nil {
 		return nil, nil, err
@@ -469,6 +474,9 @@ func restoreArchiveAssets(tx *sql.Tx, taskID int64, raw json.RawMessage) (map[in
 		} else if found {
 			mapping[oldID] = existing
 			if _, err := tx.Exec(`UPDATE assets SET task_ids=CASE WHEN $1=ANY(task_ids) THEN task_ids ELSE array_append(task_ids,$1) END WHERE id=$2`, taskID, existing); err != nil {
+				return nil, nil, err
+			}
+			if err := org.SyncAssetTx(ctx, tx, existing); err != nil {
 				return nil, nil, err
 			}
 			continue
@@ -497,6 +505,9 @@ func restoreArchiveAssets(tx *sql.Tx, taskID int64, raw json.RawMessage) (map[in
 			if _, err := tx.Exec(`UPDATE assets SET task_ids=CASE WHEN $1=ANY(task_ids) THEN task_ids ELSE array_append(task_ids,$1) END WHERE id=$2`, taskID, existing); err != nil {
 				return nil, nil, err
 			}
+		}
+		if err := org.SyncAssetTx(ctx, tx, candidate); err != nil {
+			return nil, nil, err
 		}
 		mapping[oldID] = candidate
 	}
@@ -586,6 +597,13 @@ func remapArchiveAssetReferences(tables map[string]json.RawMessage, mapping map[
 			return nil, err
 		}
 		for _, row := range rows {
+			if table == "findings" {
+				if old, ok := jsonInt64(row["asset_id"]); ok {
+					if replacement, exists := mapping[old]; exists {
+						row["asset_id"] = replacement
+					}
+				}
+			}
 			key := "asset_ids"
 			container := row
 			if table == "exploration_nodes" {

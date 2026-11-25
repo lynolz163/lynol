@@ -489,11 +489,28 @@ export interface FindingAsset {
   label: string;
 }
 
+export interface FindingAttribution {
+  asset_id: number | null;
+  asset_identifier: string | null;
+  department_id: number | null;
+  department_name: string | null;
+  department_active: boolean | null;
+  business_line_id: number | null;
+  business_line_name: string | null;
+  business_line_active: boolean | null;
+  owner_id: number | null;
+  owner_name: string | null;
+  owner_active: boolean | null;
+  owner_resolution: string;
+  attribution_quality: string;
+}
+
 export interface Finding {
+  org_attribution?: FindingAttribution;
   business_line_id?: number;
   assignee_id?: number;
-	 business_line?: string;
-	 assignee?: string;
+  business_line?: string;
+  assignee?: string;
   traffic_count?: number;
   evidence_version?: number;
   report_evidence_version?: number;
@@ -580,6 +597,9 @@ export interface FindingTaskOption {
 
 // FindingQuery 是发现列表分页/筛选/排序参数。
 export interface FindingQuery {
+  department_id?: string;
+  business_line_id?: string;
+  owner_id?: string;
   business_line?: string;
   assignee?: string;
   active_only?: boolean;

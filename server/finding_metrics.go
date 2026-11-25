@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/db"
+	orgreport "github.com/Autumn-27/artex/internal/report"
 )
 
 func (s *Server) findingHistory(w http.ResponseWriter, r *http.Request) {
@@ -44,6 +45,16 @@ func (s *Server) findingMetrics(w http.ResponseWriter, r *http.Request) {
 	to, toErr := time.ParseInLocation("2006-01-02", q.Get("to"), db.FindingMetricsLocation)
 	today := time.Now().In(db.FindingMetricsLocation).Format("2006-01-02")
 	filter := db.FindingMetricsFilter{Severity: q.Get("severity"), BusinessLine: q.Get("business_line"), Assignee: q.Get("assignee")}
+	for name, target := range map[string]**int64{"department_id": &filter.DepartmentID, "business_line_id": &filter.BusinessLineID, "owner_id": &filter.OwnerID} {
+		if raw := q.Get(name); raw != "" {
+			id, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil || id < 0 {
+				writeErr(w, 400, "筛选编号应为非负整数")
+				return
+			}
+			*target = &id
+		}
+	}
 	if fromErr != nil || toErr != nil || from.After(to) || to.Sub(from) > 365*24*time.Hour || q.Get("to") > today {
 		writeErr(w, 400, "请选择截至今天、跨度不超过一年的日期范围")
 		return
@@ -52,7 +63,7 @@ func (s *Server) findingMetrics(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "无效的严重等级")
 		return
 	}
-	report, err := pg.FindingMetrics(r.Context(), from.Format("2006-01-02"), to.Format("2006-01-02"), filter)
+	report, err := orgreport.New(pg.DB).Metrics(r.Context(), from.Format("2006-01-02"), to.Format("2006-01-02"), filter)
 	if err != nil {
 		log.Printf("[finding-metrics] %v", err)
 		writeErr(w, 500, "读取治理指标失败")
@@ -68,7 +79,7 @@ func (s *Server) refreshFindingMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
 	defer cancel()
-	if err := pg.RefreshFindingMetrics(ctx); err != nil {
+	if err := orgreport.New(pg.DB).Refresh(ctx, time.Now()); err != nil {
 		log.Printf("[finding-metrics] refresh: %v", err)
 		writeErr(w, 500, "更新统计失败，请稍后重试")
 		return
@@ -118,7 +129,7 @@ func (s *Server) findingSLA(w http.ResponseWriter, r *http.Request) {
 func (s *Server) runFindingMetrics(ctx context.Context) {
 	for {
 		runCtx, cancel := context.WithTimeout(ctx, time.Minute)
-		err := s.m.pg.RefreshFindingMetrics(runCtx)
+		err := orgreport.New(s.m.pg.DB).Refresh(runCtx, time.Now())
 		cancel()
 		if ctx.Err() != nil {
 			return

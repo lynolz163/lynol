@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 
+import Link from "next/link";
+
 import { type FindingGuideTopic, FindingMetricInfo } from "@/components/finding-metrics-guide";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,36 +17,34 @@ export function FindingGroupMetrics({
   report: FindingMetricsReport;
   onExplain: (topic: FindingGuideTopic) => void;
 }) {
-  const [dimension, setDimension] = useState<"business_line" | "assignee">("business_line");
-  const dimensions = (["business_line", "assignee"] as const).filter(
+  const [dimension, setDimension] = useState<"department" | "business_line" | "assignee">("department");
+  const dimensions = (["department", "business_line", "assignee"] as const).filter(
     (key) => report.groups.filter((group) => group.dimension === key).length > 1,
   );
   if (!dimensions.length) return null;
   const selected = dimensions.includes(dimension) ? dimension : dimensions[0];
   const groups = report.groups.filter((group) => group.dimension === selected);
+  const labels = { department: "部门", business_line: "业务线", assignee: "负责人" };
+  const missing = { department: "部门未归属", business_line: "业务线未归属", assignee: "负责人未指派" };
   return (
     <Card className="min-w-0">
       <CardHeader className="flex flex-wrap items-start justify-between gap-3">
         <CardTitle className="flex items-center gap-1">
-          {selected === "business_line" ? "业务线对比" : "负责人 / 团队对比"}
+          {labels[selected]}对比
           <FindingMetricInfo topic="groups" onOpen={onExplain} />
         </CardTitle>
         {dimensions.length > 1 && (
           <div className="flex gap-1">
-            <Button
-              size="sm"
-              variant={selected === "business_line" ? "default" : "outline"}
-              onClick={() => setDimension("business_line")}
-            >
-              业务线
-            </Button>
-            <Button
-              size="sm"
-              variant={selected === "assignee" ? "default" : "outline"}
-              onClick={() => setDimension("assignee")}
-            >
-              负责人 / 团队
-            </Button>
+            {dimensions.map((key) => (
+              <Button
+                key={key}
+                size="sm"
+                variant={selected === key ? "default" : "outline"}
+                onClick={() => setDimension(key)}
+              >
+                {labels[key]}
+              </Button>
+            ))}
           </div>
         )}
       </CardHeader>
@@ -52,7 +52,7 @@ export function FindingGroupMetrics({
         <Table className="min-w-[720px]">
           <TableHeader>
             <TableRow>
-              <TableHead>{selected === "business_line" ? "业务线" : "负责人 / 团队"}</TableHead>
+              <TableHead>{labels[selected]}</TableHead>
               <TableHead className="text-right">待处置</TableHead>
               <TableHead className="text-right">逾期</TableHead>
               <TableHead className="text-right">逾期率</TableHead>
@@ -64,9 +64,25 @@ export function FindingGroupMetrics({
           </TableHeader>
           <TableBody>
             {groups.map((group) => (
-              <TableRow key={group.name}>
+              <TableRow key={group.id === undefined ? group.name : `${group.dimension}:${group.id}`}>
                 <TableCell className="font-medium">
-                  {group.name || (selected === "business_line" ? "业务线未归属" : "负责人未指派")}
+                  {group.name ? (
+                    <>
+                      {group.name}
+                      {group.active === false && <span className="ml-1 text-muted-foreground text-xs">（已停用）</span>}
+                    </>
+                  ) : (
+                    <Link
+                      href={
+                        selected === "assignee"
+                          ? "/settings/org?tab=people"
+                          : "/settings/org?tab=assets&asset_status=unassigned"
+                      }
+                      className="text-primary hover:underline"
+                    >
+                      {missing[selected]}
+                    </Link>
+                  )}
                 </TableCell>
                 <TableCell className="text-right">{report.stock_known ? group.open : "—"}</TableCell>
                 <TableCell className={`text-right ${group.overdue > 0 ? "text-red-600" : "text-muted-foreground"}`}>

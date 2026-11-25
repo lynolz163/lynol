@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/internal/report"
 	"github.com/Autumn-27/artex/notify"
 )
 
@@ -215,8 +218,89 @@ func (n *Notifier) stepRealtime(ctx context.Context, ch *db.NotificationChannel,
 			_ = n.pg.FailDeliveries(ctx, []int64{dl.ID}, err.Error())
 			continue
 		}
-		n.send(ctx, channel, cfg, msg, []*db.NotificationDelivery{dl})
+		deliveryConfig := cfg
+		if msg.Report != nil && msg.Report.DepartmentID > 0 {
+			// Stored scope remains authoritative, including reports queued before
+			// business_line_id was added to notification payloads.
+			var raw []byte
+			var filter db.FindingMetricsFilter
+			err = n.pg.QueryRowContext(ctx, `SELECT department_id,filter FROM finding_reports WHERE id=$1 AND attribution_version=1`, msg.Report.ID).Scan(&msg.Report.DepartmentID, &raw)
+			if err == nil {
+				err = json.Unmarshal(raw, &filter)
+			}
+			if err == nil {
+				deliveryConfig, err = n.departmentReportConfig(ctx, ch, cfg, msg.Report.DepartmentID, filter.BusinessLineID)
+			}
+		} else {
+			deliveryConfig, _, err = n.findingDeliveryConfig(ctx, ch, cfg, dl.FindingID)
+		}
+		if err != nil {
+			_ = n.pg.FailDeliveries(ctx, []int64{dl.ID}, err.Error())
+			continue
+		}
+		n.send(ctx, channel, deliveryConfig, msg, []*db.NotificationDelivery{dl})
 	}
+}
+
+// Report numbers are frozen; delivery follows the department's current enabled
+// head and channels. A shared SMTP channel is copied for this message only.
+func (n *Notifier) departmentReportConfig(ctx context.Context, ch *db.NotificationChannel, cfg map[string]any, departmentID int64, businessLineID *int64) (map[string]any, error) {
+	var email string
+	err := n.pg.QueryRowContext(ctx, `SELECT u.email FROM org.department d
+		JOIN org.department_head_history h ON h.department_id=d.id
+		JOIN org.app_user u ON u.id=h.head_id
+		WHERE d.id=$1 AND d.active AND u.active AND $2=ANY(d.channel_ids)
+		AND h.department_active AND h.voided_at IS NULL
+		AND tstzrange(h.valid_from,h.valid_to,'[)') @> statement_timestamp()
+		AND tstzrange(h.finding_from,h.finding_to,'[)') @> statement_timestamp()`, departmentID, ch.ID).Scan(&email)
+	if err != nil {
+		return nil, fmt.Errorf("部门报告无法投递：请检查部门是否启用、负责人是否在职及部门通知渠道配置: %w", err)
+	}
+	if ch.Kind == notify.KindEmail {
+		cc, err := report.New(n.pg.DB).DevelopmentGroupCC(ctx, departmentID, businessLineID, email)
+		if err != nil {
+			return nil, fmt.Errorf("部门报告抄送人员读取失败: %w", err)
+		}
+		cfg = maps.Clone(cfg)
+		cfg["to"] = []any{email}
+		cfg["cc"] = cc
+	}
+	return cfg, nil
+}
+
+// findingDeliveryConfig resolves current responsibility for delivery only.
+// Legacy global channels retain their configured destination when they are not
+// selected by this finding's organization; managed channels cannot broadcast.
+func (n *Notifier) findingDeliveryConfig(ctx context.Context, ch *db.NotificationChannel, cfg map[string]any, findingID int64) (map[string]any, string, error) {
+	route, err := n.pg.FindingNotificationRoute(ctx, findingID)
+	if err != nil {
+		return nil, "", err
+	}
+	if !slices.Contains(route.ChannelIDs, ch.ID) {
+		if ch.OrgManaged {
+			return nil, "", fmt.Errorf("漏洞当前归属已不再使用此组织通知渠道，请按新的归属重新通知")
+		}
+		return cfg, "global", nil
+	}
+	key, _ := json.Marshal([]*int64{route.DepartmentID, route.BusinessLineID, route.OwnerID})
+	if ch.Kind == notify.KindEmail {
+		if route.OwnerID == nil || route.OwnerEmail == "" {
+			return nil, "", fmt.Errorf("漏洞当前没有可用的负责人邮箱，请先完成负责人配置")
+		}
+		// A department-only asset has no business-line groups to copy.
+		line := int64(0)
+		if route.BusinessLineID != nil {
+			line = *route.BusinessLineID
+		}
+		cc, err := report.New(n.pg.DB).DevelopmentGroupCC(ctx, *route.DepartmentID, &line, route.OwnerEmail)
+		if err != nil {
+			return nil, "", err
+		}
+		cfg = maps.Clone(cfg)
+		cfg["to"] = []any{route.OwnerEmail}
+		cfg["cc"] = cc
+	}
+	return cfg, string(key), nil
 }
 
 // stepDigest 在批次到期时把某渠道的待发投递聚合成一条消息发出。
@@ -258,9 +342,41 @@ func (n *Notifier) stepDigest(ctx context.Context, ch *db.NotificationChannel, a
 		}
 		log.Printf("[notify] 跳过 %d 条快照无法解析的投递 channel=%d", len(skipped), ch.ID)
 	}
-	// 只把进了消息的那些交给 send：included[i] 与 msg.Items[i] 严格对应，
-	// send 依赖这个对应关系把「渠道回报装下了前 K 条」落到正确的投递行上。
-	n.send(ctx, channel, cfg, msg, included)
+	// A shared digest channel may contain multiple organizational recipients.
+	// Keep each department/line/owner combination separate, even with the same To.
+	type group struct {
+		config     map[string]any
+		message    notify.Message
+		deliveries []*db.NotificationDelivery
+	}
+	groups := []*group{}
+	byKey := map[string]*group{}
+	for i, dl := range included {
+		deliveryConfig, key, err := n.findingDeliveryConfig(ctx, ch, cfg, dl.FindingID)
+		if err != nil {
+			_ = n.pg.FailDeliveries(ctx, []int64{dl.ID}, err.Error())
+			continue
+		}
+		g := byKey[key]
+		if g == nil {
+			copy := msg
+			copy.Items = nil
+			g = &group{config: deliveryConfig, message: copy}
+			byKey[key] = g
+			groups = append(groups, g)
+		}
+		g.message.Items = append(g.message.Items, msg.Items[i])
+		g.deliveries = append(g.deliveries, dl)
+	}
+	for i, g := range groups {
+		// step already paid for the first message. Additional recipient groups
+		// each consume a token and must fit the existing per-tick lease budget.
+		if i >= notifyMaxSendsPerChannelPerTick || (i > 0 && n.takeTokens(ch.ID, ch.RatePerMin, 1, time.Now()) == 0) {
+			_ = n.pg.DeferDeliveries(ctx, deliveryIDs(g.deliveries), "按接收范围分组，等待下一轮投递")
+			continue
+		}
+		n.send(ctx, channel, g.config, g.message, g.deliveries)
+	}
 }
 
 // send 投递并按结果流转状态。

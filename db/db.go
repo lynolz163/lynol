@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/config"
+	"github.com/Autumn-27/artex/internal/org"
 	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx database/sql driver ("pgx")
 )
@@ -54,7 +55,7 @@ func isPostgresDeadlock(err error) bool {
 
 func applySchemaWithRetry(ctx context.Context, execer schemaExecer, sleep func(time.Duration)) error {
 	for attempt := 0; ; attempt++ {
-		if _, err := execer.ExecContext(ctx, schemaSQL+"\n"+findingHistorySQL+"\n"+findingReportsSQL+"\n"+responsibilitySQL); err != nil {
+		if _, err := execer.ExecContext(ctx, schemaSQL+"\n"+findingHistorySQL+"\n"+findingReportsSQL+"\n"+responsibilitySQL+"\n"+org.SchemaSQL); err != nil {
 			if !isPostgresDeadlock(err) || attempt >= len(schemaDeadlockRetryDelays) {
 				return err
 			}

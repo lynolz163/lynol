@@ -91,6 +91,7 @@ export const sidebarItems: NavGroup[] = [
       { id: "skills", title: "Skill", url: "/system/skills", icon: Sparkles },
       { id: "tools", title: "工具", url: "/system/tools", icon: Wrench },
       { id: "responsibility", title: "业务线与负责人", url: "/system/responsibility", icon: Users },
+      { id: "organization", title: "部门与归属", url: "/settings/org", icon: Users },
       { id: "notify", title: "通知推送", url: "/system/notify", icon: BellRing },
       { id: "intercept", title: "拦截规则", url: "/system/intercept", icon: ShieldAlert },
       { id: "asset-intercept", title: "资产拦截", url: "/system/intercept/assets", icon: Ban },

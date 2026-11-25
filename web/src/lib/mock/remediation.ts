@@ -465,9 +465,27 @@ export function mockGenerateFindingReport(kind: "weekly" | "monthly", filter: Fi
     to: iso(to),
     generated_at: new Date().toISOString(),
     filter: { ...filter },
-    current: structuredClone(mockFindingMetrics(new URLSearchParams({ from: iso(from), to: iso(to), ...filter }))),
+    current: structuredClone(
+      mockFindingMetrics(
+        new URLSearchParams({
+          from: iso(from),
+          to: iso(to),
+          severity: filter.severity,
+          business_line: filter.business_line,
+          assignee: filter.assignee,
+        }),
+      ),
+    ),
     previous: structuredClone(
-      mockFindingMetrics(new URLSearchParams({ from: iso(prior), to: iso(previousTo), ...filter })),
+      mockFindingMetrics(
+        new URLSearchParams({
+          from: iso(prior),
+          to: iso(previousTo),
+          severity: filter.severity,
+          business_line: filter.business_line,
+          assignee: filter.assignee,
+        }),
+      ),
     ),
     delivery_state: "generated",
     delivery_error: "",

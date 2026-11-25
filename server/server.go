@@ -116,9 +116,10 @@ type Server struct {
 
 	// Cold task archives run through one persistent FIFO worker. The buffered wake
 	// channel coalesces enqueue bursts; the database remains the source of truth.
-	archiveWake chan struct{}
-	archiveWG   sync.WaitGroup
-	side        *sideQuestionState
+	archiveWake   chan struct{}
+	archiveWG     sync.WaitGroup
+	orgWorkerDone chan struct{}
+	side          *sideQuestionState
 }
 
 // provEntry is a cached provider + its config for one LLM profile id.
@@ -257,6 +258,7 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	s.restoreTaskRuntimes()
 	go s.reconcileConcurrency()
 	s.startTaskArchiveWorker()
+	s.startOrganizationWorker()
 	s.wireInterceptReviewer() // LLM 兜底审批:未命中拦截规则的命令交给模型判定
 	return s
 }
@@ -762,6 +764,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/exploration/findings/metrics", s.findingMetrics)
 	mux.HandleFunc("GET /api/exploration/findings/responsibility-options", s.findingResponsibilityOptions)
 	mux.HandleFunc("GET /api/exploration/responsibility", s.responsibilityDirectory)
+	mux.HandleFunc("/api/org/", s.organization)
 	mux.HandleFunc("PUT /api/exploration/responsibility/{kind}", s.saveResponsibility)
 	mux.HandleFunc("PUT /api/exploration/findings/responsibility", s.setFindingResponsibility)
 	mux.HandleFunc("GET /api/exploration/finding-report-schedules", s.findingReportSchedules)

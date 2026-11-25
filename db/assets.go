@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,9 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
+
+	"github.com/Autumn-27/artex/internal/org"
 )
 
 // =====================================================================
@@ -129,6 +133,20 @@ func (s *AssetStore) resolveCompanyWithICP(rootDomain, ipStr, icp string) (*int6
 		return resolveCompanyWithICP(s.tx, rootDomain, ipStr, icp)
 	}
 	return s.company.ResolveCompanyWithICP(rootDomain, ipStr, icp)
+}
+
+// The directory registration and initial rule assignment commit with the asset.
+// This is also used by nested host/IP writes so derived assets are not missed.
+func (s *AssetStore) finishAssetWrite(id int64, err error) (int64, error) {
+	if err != nil {
+		return id, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := org.SyncAssetTx(ctx, s.tx, id); err != nil {
+		return 0, fmt.Errorf("register asset ownership: %w", err)
+	}
+	return id, nil
 }
 
 // =====================================================================
@@ -298,7 +316,7 @@ ON CONFLICT (domain) WHERE type = 'root_domain' DO UPDATE SET
     extra      = assets.extra || EXCLUDED.extra,
     last_seen  = now()
 RETURNING id`, domain, icpVal, companyID, taskIDs).Scan(&id)
-	return id, err
+	return s.finishAssetWrite(id, err)
 }
 
 // ErrAssetIPInvalid marks a non-address value in an asset's ip field. Both
@@ -398,7 +416,7 @@ ON CONFLICT (ip) WHERE type = 'ip' DO UPDATE SET
     task_ids   = (SELECT ARRAY(SELECT DISTINCT unnest(assets.task_ids || EXCLUDED.task_ids))),
     last_seen  = now()
 RETURNING id`, req.IP, csegVal, boundDomains, openPortsJSON, companyID, taskIDs).Scan(&id)
-	return id, err
+	return s.finishAssetWrite(id, err)
 }
 
 // AppendIPPort appends a {port, service} entry to an existing IP asset's open_ports.
@@ -546,7 +564,7 @@ ON CONFLICT (domain, COALESCE(record_type,'')) WHERE type = 'subdomain' DO UPDAT
     extra        = assets.extra || EXCLUDED.extra,
     last_seen    = now()
 RETURNING id`, domain, rootDomain, recordType, recordValueArr, ipVal, csegVal, icpVal, companyID, taskIDs).Scan(&id)
-	return id, err
+	return s.finishAssetWrite(id, err)
 }
 
 // =====================================================================
@@ -658,7 +676,7 @@ ON CONFLICT (app_name) WHERE type = 'app' AND bundle_id IS NULL DO UPDATE SET
     last_seen       = now()
 RETURNING id`, req.Name, catVal, descVal, icpVal, companyIDVal, companySource, taskIDs).Scan(&id)
 	}
-	return id, err
+	return s.finishAssetWrite(id, err)
 }
 
 // =====================================================================
@@ -799,7 +817,7 @@ RETURNING id`,
 			TaskID:       req.TaskID,
 		})
 	}
-	return id, nil
+	return s.finishAssetWrite(id, nil)
 }
 
 // =====================================================================
@@ -930,7 +948,7 @@ RETURNING id`,
 		})
 	}
 	s.linkHostAssets(domain, rootDomain, req.TaskID)
-	return id, nil
+	return s.finishAssetWrite(id, nil)
 }
 
 // linkHostAssets ensures a service/endpoint's host is also registered as its own
@@ -1056,7 +1074,7 @@ RETURNING id`,
 	if req.IP != "" {
 		_, _ = s.UpsertIP(UpsertIPReq{IP: req.IP, TaskID: req.TaskID})
 	}
-	return id, nil
+	return s.finishAssetWrite(id, nil)
 }
 
 // =====================================================================

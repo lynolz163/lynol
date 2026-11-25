@@ -52,12 +52,13 @@ func ValidNotifyMode(m string) bool {
 // NotificationChannel 是一个渠道实例配置。Config 与 Filter 保持原始 JSON，
 // 解析交给 notify 包——db 层不理解它们的字段含义。
 type NotificationChannel struct {
-	ID     int64           `json:"id"`
-	Name   string          `json:"name"`
-	Kind   string          `json:"kind"`
-	Mode   string          `json:"mode"`
-	Config json.RawMessage `json:"config"`
-	Filter json.RawMessage `json:"filter"`
+	ID         int64           `json:"id"`
+	OrgManaged bool            `json:"org_managed"`
+	Name       string          `json:"name"`
+	Kind       string          `json:"kind"`
+	Mode       string          `json:"mode"`
+	Config     json.RawMessage `json:"config"`
+	Filter     json.RawMessage `json:"filter"`
 	// Enabled 用指针是为了区分「没传这个字段」与「显式传 false」——
 	// 前端开关控件只提交被改动的字段。
 	Enabled    *bool     `json:"enabled,omitempty"`
@@ -78,12 +79,12 @@ type NotificationEvent struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 
-const notificationChannelCols = `id, name, kind, enabled, config, mode, filter, rate_per_min, created_at, updated_at`
+const notificationChannelCols = `id, name, kind, enabled, config, mode, filter, rate_per_min, created_at, updated_at, org_managed`
 
 func scanNotificationChannel(sc interface{ Scan(...any) error }) (*NotificationChannel, error) {
 	var c NotificationChannel
 	var enabled bool
-	if err := sc.Scan(&c.ID, &c.Name, &c.Kind, &enabled, &c.Config, &c.Mode, &c.Filter, &c.RatePerMin, &c.CreatedAt, &c.UpdatedAt); err != nil {
+	if err := sc.Scan(&c.ID, &c.Name, &c.Kind, &enabled, &c.Config, &c.Mode, &c.Filter, &c.RatePerMin, &c.CreatedAt, &c.UpdatedAt, &c.OrgManaged); err != nil {
 		return nil, err
 	}
 	c.Enabled = &enabled
@@ -151,9 +152,9 @@ func (d *DB) SaveNotificationChannel(ctx context.Context, c *NotificationChannel
 
 	if c.ID == 0 {
 		var id int64
-		err := d.QueryRowContext(ctx, `INSERT INTO notification_channels(name,kind,enabled,config,mode,filter,rate_per_min)
-VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-			c.Name, c.Kind, enabled, string(c.Config), c.Mode, string(c.Filter), c.RatePerMin).Scan(&id)
+		err := d.QueryRowContext(ctx, `INSERT INTO notification_channels(name,kind,enabled,config,mode,filter,rate_per_min,org_managed)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+			c.Name, c.Kind, enabled, string(c.Config), c.Mode, string(c.Filter), c.RatePerMin, c.OrgManaged).Scan(&id)
 		return id, err
 	}
 	res, err := d.ExecContext(ctx, `UPDATE notification_channels
@@ -353,10 +354,23 @@ WHERE NOT fanned_out ORDER BY id FOR UPDATE SKIP LOCKED LIMIT $1`, limit)
 	if e != nil {
 		return 0, 0, e
 	}
+	orgRoutes, e := findingNotificationRoutes(ctx, tx, eventFindingIDs)
+	if e != nil {
+		return 0, 0, e
+	}
 	for i, snap := range parsedSnaps {
 		for _, ch := range channels {
-			if ids := routing[events[i].FindingID]; len(ids) > 0 && !slices.Contains(ids, ch.ID) {
+			selected := slices.Contains(orgRoutes[events[i].FindingID].ChannelIDs, ch.ID)
+			if ch.OrgManaged && !selected {
 				continue
+			}
+			// An explicit current organization choice takes precedence over a
+			// retained legacy business-line setting. Unselected global channels
+			// still follow their existing routing and filter behavior.
+			if !selected && !ch.OrgManaged {
+				if ids := routing[events[i].FindingID]; len(ids) > 0 && !slices.Contains(ids, ch.ID) {
+					continue
+				}
 			}
 			if !notify.Match(notify.ParseFilter(ch.Filter), snap) {
 				continue
@@ -394,7 +408,7 @@ WHERE NOT fanned_out ORDER BY id FOR UPDATE SKIP LOCKED LIMIT $1`, limit)
 // listEnabledNotificationChannelsTx 在事务里取启用中的渠道。数量很少，
 // 不做分页也不加缓存——缓存会引入「改了配置何时生效」这个额外的时序问题。
 func listEnabledNotificationChannelsTx(ctx context.Context, tx *sql.Tx) ([]*NotificationChannel, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT id, name, kind, config, mode, filter, rate_per_min
+	rows, err := tx.QueryContext(ctx, `SELECT id, name, kind, config, mode, filter, rate_per_min, org_managed
 FROM notification_channels WHERE enabled ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -403,12 +417,54 @@ FROM notification_channels WHERE enabled ORDER BY id`)
 	out := []*NotificationChannel{}
 	for rows.Next() {
 		var c NotificationChannel
-		if err := rows.Scan(&c.ID, &c.Name, &c.Kind, &c.Config, &c.Mode, &c.Filter, &c.RatePerMin); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Kind, &c.Config, &c.Mode, &c.Filter, &c.RatePerMin, &c.OrgManaged); err != nil {
 			return nil, err
 		}
 		out = append(out, &c)
 	}
 	return out, rows.Err()
+}
+
+// FindingNotificationRoute is a current delivery decision, never a historical
+// attribution snapshot. Only the resolved line or department selects channels.
+type FindingNotificationRoute struct {
+	DepartmentID, BusinessLineID, OwnerID *int64
+	OwnerEmail                            string
+	ChannelIDs                            []int64
+}
+
+func (d *DB) FindingNotificationRoute(ctx context.Context, findingID int64) (FindingNotificationRoute, error) {
+	routes, err := findingNotificationRoutes(ctx, d, []int64{findingID})
+	return routes[findingID], err
+}
+
+func findingNotificationRoutes(ctx context.Context, q interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, findingIDs []int64) (map[int64]FindingNotificationRoute, error) {
+	routes := map[int64]FindingNotificationRoute{}
+	rows, err := q.QueryContext(ctx, `SELECT v.id,r.department_id,r.business_line_id,r.owner_id,COALESCE(u.email,''),
+ to_jsonb(CASE WHEN d.active THEN CASE WHEN l.active AND cardinality(l.channel_ids)>0 THEN l.channel_ids ELSE d.channel_ids END ELSE '{}'::bigint[] END)
+ FROM unnest($1::bigint[]) v(id) CROSS JOIN LATERAL org.resolve_finding_owner(v.id,statement_timestamp()) r
+ LEFT JOIN org.department d ON d.id=r.department_id
+ LEFT JOIN org.business_line l ON l.id=r.business_line_id AND l.department_id=d.id
+ LEFT JOIN org.app_user u ON u.id=r.owner_id AND u.active`, findingIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var route FindingNotificationRoute
+		var raw []byte
+		if err = rows.Scan(&id, &route.DepartmentID, &route.BusinessLineID, &route.OwnerID, &route.OwnerEmail, &raw); err != nil {
+			return nil, err
+		}
+		if err = json.Unmarshal(raw, &route.ChannelIDs); err != nil {
+			return nil, err
+		}
+		routes[id] = route
+	}
+	return routes, rows.Err()
 }
 
 // NotificationAssetNames 把资产 id 解析成简短展示名，供推送消息使用。

@@ -3,21 +3,20 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/internal/org"
+	orgreport "github.com/Autumn-27/artex/internal/report"
 	"github.com/Autumn-27/artex/notify"
 )
 
 func validFindingMetricsFilter(f db.FindingMetricsFilter) bool {
-	return (f.Severity == "" || db.ValidSeverity(f.Severity)) && utf8.RuneCountInString(f.BusinessLine) <= 120 && utf8.RuneCountInString(f.Assignee) <= 120
+	return orgreport.ValidateFilter(f) == nil
 }
 
 func (s *Server) findingResponsibilityOptions(w http.ResponseWriter, r *http.Request) {
@@ -25,7 +24,7 @@ func (s *Server) findingResponsibilityOptions(w http.ResponseWriter, r *http.Req
 	if pg == nil {
 		return
 	}
-	out, err := pg.FindingResponsibilityOptions(r.Context())
+	out, err := org.New(pg.DB).Directory(r.Context())
 	if err != nil {
 		writeErr(w, 500, "读取归属选项失败")
 		return
@@ -34,47 +33,7 @@ func (s *Server) findingResponsibilityOptions(w http.ResponseWriter, r *http.Req
 }
 
 func (s *Server) setFindingResponsibility(w http.ResponseWriter, r *http.Request) {
-	pg := s.pg(w)
-	if pg == nil {
-		return
-	}
-	var body struct {
-		FindingIDs   []string `json:"finding_ids"`
-		BusinessLine string   `json:"business_line"`
-		Assignee     string   `json:"assignee"`
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 32768)
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.FindingIDs) < 1 || len(body.FindingIDs) > 500 {
-		writeErr(w, 400, "请选择 1 至 500 个漏洞")
-		return
-	}
-	body.BusinessLine = strings.TrimSpace(body.BusinessLine)
-	body.Assignee = strings.TrimSpace(body.Assignee)
-	for _, v := range []string{body.BusinessLine, body.Assignee} {
-		if utf8.RuneCountInString(v) > 120 || strings.ContainsAny(v, "\x00\r\n") || v == "__none__" || v == "__all__" {
-			writeErr(w, 400, "业务线和负责人最多 120 字，不能含换行或保留名称")
-			return
-		}
-	}
-	ids := make([]int64, 0, len(body.FindingIDs))
-	for _, raw := range body.FindingIDs {
-		id, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || id <= 0 {
-			writeErr(w, 400, "无效漏洞编号")
-			return
-		}
-		ids = append(ids, id)
-	}
-	updated, err := pg.SetFindingResponsibility(r.Context(), ids, body.BusinessLine, body.Assignee)
-	if err != nil {
-		if errors.Is(err, db.ErrResponsibilityInput) {
-			writeErr(w, 400, err.Error())
-		} else {
-			writeErr(w, 500, "保存归属失败")
-		}
-		return
-	}
-	writeJSON(w, 200, map[string]any{"updated": updated})
+	writeJSON(w, http.StatusConflict, map[string]any{"error": "漏洞归属沿用主资产，请到资产归属页面调整", "code": "asset_ownership_required", "redirect": "/settings/org?tab=assets"})
 }
 
 func (s *Server) findingReportSchedules(w http.ResponseWriter, r *http.Request) {
@@ -99,17 +58,13 @@ func (s *Server) findingReportSchedules(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, 400, "报告计划参数无效")
 		return
 	}
-	if schedule.Enabled && schedule.ChannelID == nil {
-		writeErr(w, 400, "请先选择接收渠道")
+	if err := orgreport.New(pg.DB).ValidateSchedule(r.Context(), schedule); err != nil {
+		writeErr(w, 400, err.Error())
 		return
 	}
-	if schedule.ChannelID != nil {
-		ch, err := pg.NotificationChannelByID(r.Context(), *schedule.ChannelID)
-		if err != nil || (ch.Kind != notify.KindEmail && ch.Kind != notify.KindWeCom) || (schedule.Enabled && !ch.IsEnabled()) {
-			writeErr(w, 400, "请选择已启用的邮件或企业微信渠道")
-			return
-		}
-	}
+	schedule.Filter.AttributionVersion = 1
+	schedule.Filter.DepartmentID = nil
+	schedule.ChannelID = nil
 	if err := pg.SaveFindingReportSchedule(r.Context(), schedule); err != nil {
 		writeErr(w, 500, "保存报告计划失败")
 		return
@@ -142,13 +97,13 @@ func (s *Server) findingReports(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
 	defer cancel()
-	if err := pg.RefreshFindingMetrics(ctx); err != nil {
+	if err := orgreport.New(pg.DB).Refresh(ctx, time.Now()); err != nil {
 		writeErr(w, 500, "汇总失败，请稍后重试")
 		return
 	}
-	id, err := pg.StoreFindingReport(ctx, body.Kind, time.Now(), body.Filter)
+	id, err := orgreport.New(pg.DB).StoreReport(ctx, body.Kind, time.Now(), body.Filter)
 	if err != nil {
-		writeErr(w, 500, "生成报告失败")
+		writeErr(w, 400, err.Error())
 		return
 	}
 	writeJSON(w, 200, map[string]int64{"id": id})
@@ -227,11 +182,15 @@ func findingReportContent(report *db.SavedFindingReport) notify.ReportContent {
 	if total := summary.RetestPassed + summary.RetestFailed; total > 0 {
 		lines = append(lines, fmt.Sprintf("复测不通过率 %.1f%%（%d / %d）", 100*float64(summary.RetestFailed)/float64(total), summary.RetestFailed, total))
 	}
-	if current.QualityKnown && summary.FirstRetestTotal > 0 {
-		lines = append(lines, fmt.Sprintf("一次修复通过率 %.1f%%（%d / %d）", 100*float64(summary.FirstRetestPassed)/float64(summary.FirstRetestTotal), summary.FirstRetestPassed, summary.FirstRetestTotal))
+	qualityNote := ""
+	if !current.QualityKnown {
+		qualityNote = "（已记录样本）"
 	}
-	if current.QualityKnown && summary.VerifiedFixes > 0 {
-		lines = append(lines, fmt.Sprintf("平均返工 %.2f 轮（%d 次返工 / %d 次确认修复）", float64(summary.ReworkRounds)/float64(summary.VerifiedFixes), summary.ReworkRounds, summary.VerifiedFixes))
+	if summary.FirstRetestTotal > 0 {
+		lines = append(lines, fmt.Sprintf("一次修复通过率 %.1f%%（%d / %d）", 100*float64(summary.FirstRetestPassed)/float64(summary.FirstRetestTotal), summary.FirstRetestPassed, summary.FirstRetestTotal)+qualityNote)
+	}
+	if summary.VerifiedFixes > 0 {
+		lines = append(lines, fmt.Sprintf("平均返工 %.2f 轮（%d 次返工 / %d 次确认修复）", float64(summary.ReworkRounds)/float64(summary.VerifiedFixes), summary.ReworkRounds, summary.VerifiedFixes)+qualityNote)
 	}
 	count := 0
 	for _, group := range current.Groups {
@@ -277,43 +236,34 @@ func (s *Server) generateDueFindingReports(ctx context.Context, now time.Time) e
 	if err != nil {
 		return err
 	}
+	store := orgreport.New(s.m.pg.DB)
 	refreshed := false
 	for _, schedule := range schedules {
-		if !db.FindingReportScheduleDue(schedule, now) {
-			continue
-		}
-		ch, err := s.m.pg.NotificationChannelByID(ctx, *schedule.ChannelID)
-		if err != nil {
-			return err
-		}
-		if !ch.IsEnabled() {
-			continue
-		}
-		from, _, _, _ := db.FindingReportPeriod(schedule.Kind, now)
-		raw, _ := json.Marshal(schedule.Filter)
-		var queued bool
-		if err := s.m.pg.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM finding_reports WHERE kind=$1 AND period_start=$2::date AND filter=$3 AND event_id IS NOT NULL)`, schedule.Kind, from.Format("2006-01-02"), raw).Scan(&queued); err != nil {
-			return err
-		}
-		if queued {
+		// Legacy schedules cannot silently acquire a new organization identity.
+		if schedule.ScopeMode != "departments" || !db.FindingReportScheduleDue(schedule, now) {
 			continue
 		}
 		if !refreshed {
-			if err := s.m.pg.RefreshFindingMetrics(ctx); err != nil {
+			if err = store.Refresh(ctx, now); err != nil {
 				return err
 			}
 			refreshed = true
 		}
-		id, err := s.m.pg.StoreFindingReport(ctx, schedule.Kind, now, schedule.Filter)
-		if err != nil {
-			return err
-		}
-		report, err := s.m.pg.GetFindingReport(ctx, id)
-		if err != nil {
-			return err
-		}
-		if err := s.m.pg.QueueFindingReport(ctx, id, *schedule.ChannelID, findingReportContent(report)); err != nil {
-			return err
+		for _, department := range schedule.DepartmentIDs {
+			filter := schedule.Filter
+			filter.DepartmentID = &department
+			filter.AttributionVersion = 1
+			id, e := store.StoreReport(ctx, schedule.Kind, now, filter)
+			if e != nil {
+				return e
+			}
+			saved, e := s.m.pg.GetFindingReport(ctx, id)
+			if e != nil {
+				return e
+			}
+			if e = store.QueueReport(ctx, id, findingReportContent(saved)); e != nil {
+				return e
+			}
 		}
 	}
 	return nil

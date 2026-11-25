@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { api } from "@/lib/api";
 import type { FindingHistoryEvent } from "@/lib/finding-metrics";
+import { type OrgDirectory, orgAPI } from "@/lib/org";
 import { statusMeta } from "@/lib/status";
 import type { Finding } from "@/lib/types";
 
@@ -13,6 +14,7 @@ const eventLabels: Record<string, string> = {
   discovered: "发现漏洞",
   sla_changed: "SLA 规则调整",
   assignment_changed: "归属调整",
+  primary_asset_changed: "归属主资产调整",
   dispatched: "漏洞下发",
   developer_fixed: "开发反馈已修复",
   retest_requested: "发起复测",
@@ -36,6 +38,10 @@ export function FindingHistoryPanel({
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [more, setMore] = useState(false);
+  const [directory, setDirectory] = useState<OrgDirectory>();
+  useEffect(() => {
+    orgAPI.directory().then(setDirectory, () => undefined);
+  }, []);
   useEffect(() => {
     let active = true;
     api.findingHistory(finding.id).then(
@@ -85,42 +91,70 @@ export function FindingHistoryPanel({
           </p>
         )}
         <ol className="max-h-96 space-y-4 overflow-y-auto">
-          {events.map((event) => (
-            <li key={event.id} className="border-muted border-l-2 pl-3 text-xs">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="font-medium">{eventLabels[event.kind] ?? event.kind}</span>
-                <time className="text-muted-foreground" dateTime={event.occurred_at}>
-                  {new Date(event.occurred_at).toLocaleString("zh-CN")}
-                </time>
-              </div>
-              {event.kind === "assignment_changed" && (
-                <p className="mt-1">
-                  业务线：{event.metadata.old_business_line || "业务线未归属"} →{" "}
-                  {event.metadata.business_line || "业务线未归属"}
-                  ；负责人：{event.metadata.old_assignee || "负责人未指派"} →{" "}
-                  {event.metadata.assignee || "负责人未指派"}
+          {events.map((event) => {
+            const legacy = (event.attribution_version ?? 0) === 0;
+            const knownAttribution =
+              event.attribution_quality === "recorded" || event.attribution_quality === "unassigned";
+            return (
+              <li key={event.id} className="border-muted border-l-2 pl-3 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-medium">{eventLabels[event.kind] ?? event.kind}</span>
+                  <time
+                    className="text-muted-foreground"
+                    dateTime={event.occurred_at}
+                    title={
+                      event.recorded_at ? `记录于 ${new Date(event.recorded_at).toLocaleString("zh-CN")}` : undefined
+                    }
+                  >
+                    {new Date(event.occurred_at).toLocaleString("zh-CN")}
+                  </time>
+                </div>
+                {legacy && <p className="mt-1 text-muted-foreground">历史归属尚未整理</p>}
+                {!legacy && knownAttribution && (
+                  <p className="mt-1 text-muted-foreground">
+                    当时归属：
+                    {event.department_id
+                      ? (directory?.departments.find((item) => item.id === event.department_id)?.name ??
+                        `部门 #${event.department_id}`)
+                      : "部门未归属"}
+                    {event.business_line_id
+                      ? ` / ${directory?.business_lines.find((item) => item.id === event.business_line_id)?.name ?? `业务线 #${event.business_line_id}`}`
+                      : ""}
+                    {` / ${event.owner_id ? (directory?.people.find((item) => item.id === event.owner_id)?.name ?? `负责人 #${event.owner_id}`) : "负责人未指派"}`}
+                  </p>
+                )}
+                {!legacy && !knownAttribution && (
+                  <p className="mt-1 text-muted-foreground">当时归属未知（缺少可核实的历史记录）</p>
+                )}
+                {event.kind === "assignment_changed" && (
+                  <p className="mt-1">
+                    业务线：{event.metadata.old_business_line || "业务线未归属"} →{" "}
+                    {event.metadata.business_line || "业务线未归属"}
+                    ；负责人：{event.metadata.old_assignee || "负责人未指派"} →{" "}
+                    {event.metadata.assignee || "负责人未指派"}
+                  </p>
+                )}
+                {event.new_status && (
+                  <p className="mt-1">
+                    {event.old_status && `${statusMeta("finding", event.old_status).label} → `}
+                    {statusMeta("finding", event.new_status).label}
+                  </p>
+                )}
+                {event.kind === "retest_completed" && (
+                  <p className="mt-1">
+                    {event.metadata.status === "completed"
+                      ? (verdictLabels[event.metadata.verdict ?? ""] ?? "无明确结论")
+                      : "中止或执行失败"}
+                  </p>
+                )}
+                <p className="mt-1 text-muted-foreground">
+                  {event.actor}
+                  {event.source === "backfill" && " · 根据已有时间回填"}
+                  {event.source === "baseline" && " · 当时状态已知，原变更时间未知"}
                 </p>
-              )}
-              {event.new_status && (
-                <p className="mt-1">
-                  {event.old_status && `${statusMeta("finding", event.old_status).label} → `}
-                  {statusMeta("finding", event.new_status).label}
-                </p>
-              )}
-              {event.kind === "retest_completed" && (
-                <p className="mt-1">
-                  {event.metadata.status === "completed"
-                    ? (verdictLabels[event.metadata.verdict ?? ""] ?? "无明确结论")
-                    : "中止或执行失败"}
-                </p>
-              )}
-              <p className="mt-1 text-muted-foreground">
-                {event.actor}
-                {event.source === "backfill" && " · 根据已有时间回填"}
-                {event.source === "baseline" && " · 当时状态已知，原变更时间未知"}
-              </p>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ol>
         {loading && !events.length && <p className="text-muted-foreground text-xs">正在读取历史…</p>}
         {!loading && !events.length && !error && <p className="text-muted-foreground text-xs">暂无流转记录</p>}

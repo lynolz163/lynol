@@ -15,9 +15,13 @@ var FindingMetricsLocation = time.FixedZone("Asia/Shanghai", 8*60*60)
 type FindingSLA map[string]int
 
 type FindingMetricsFilter struct {
-	Severity     string `json:"severity"`
-	BusinessLine string `json:"business_line"`
-	Assignee     string `json:"assignee"`
+	AttributionVersion int    `json:"attribution_version,omitempty"`
+	DepartmentID       *int64 `json:"department_id,omitempty"`
+	BusinessLineID     *int64 `json:"business_line_id,omitempty"`
+	OwnerID            *int64 `json:"owner_id,omitempty"`
+	Severity           string `json:"severity"`
+	BusinessLine       string `json:"business_line"`
+	Assignee           string `json:"assignee"`
 }
 
 func (f FindingMetricsFilter) matches(severity, businessLine, assignee string) bool {
@@ -27,6 +31,8 @@ func (f FindingMetricsFilter) matches(severity, businessLine, assignee string) b
 }
 
 type FindingMetricGroup struct {
+	ID        *int64   `json:"id"`
+	Active    bool     `json:"active"`
 	Dimension string   `json:"dimension"`
 	Name      string   `json:"name"`
 	Open      int      `json:"open"`
@@ -39,6 +45,10 @@ type FindingMetricGroup struct {
 }
 
 type FindingMetricBucket struct {
+	DepartmentID      *int64               `json:"department_id"`
+	BusinessLineID    *int64               `json:"business_line_id"`
+	OwnerID           *int64               `json:"owner_id"`
+	Department        string               `json:"department"`
 	BusinessLine      string               `json:"business_line"`
 	Assignee          string               `json:"assignee"`
 	Severity          string               `json:"severity"`
@@ -62,14 +72,23 @@ type FindingMetricBucket struct {
 }
 
 type FindingOverdue struct {
-	BusinessLine string  `json:"business_line"`
-	Assignee     string  `json:"assignee"`
-	ID           int64   `json:"id,string"`
-	Name         string  `json:"name"`
-	Severity     string  `json:"severity"`
-	AgeDays      float64 `json:"age_days"`
-	OverdueDays  float64 `json:"overdue_days"`
-	Available    bool    `json:"available"`
+	DepartmentID   *int64     `json:"department_id"`
+	BusinessLineID *int64     `json:"business_line_id"`
+	OwnerID        *int64     `json:"owner_id"`
+	Department     string     `json:"department"`
+	AssetID        *int64     `json:"asset_id"`
+	Asset          string     `json:"asset"`
+	DiscoveredAt   *time.Time `json:"discovered_at"`
+	DeadlineAt     *time.Time `json:"deadline_at"`
+	AsOf           *time.Time `json:"as_of"`
+	BusinessLine   string     `json:"business_line"`
+	Assignee       string     `json:"assignee"`
+	ID             int64      `json:"id,string"`
+	Name           string     `json:"name"`
+	Severity       string     `json:"severity"`
+	AgeDays        float64    `json:"age_days"`
+	OverdueDays    float64    `json:"overdue_days"`
+	Available      bool       `json:"available"`
 }
 
 type FindingDailySnapshot struct {
@@ -100,18 +119,35 @@ type FindingMetricTrend struct {
 }
 
 type FindingMetricsReport struct {
-	HasCustomSLA bool                   `json:"has_custom_sla"`
-	Groups       []FindingMetricGroup   `json:"groups"`
-	GeneratedAt  *time.Time             `json:"generated_at"`
-	HistorySince *time.Time             `json:"history_since"`
-	StockKnown   bool                   `json:"stock_known"`
-	QualityKnown bool                   `json:"quality_known"`
-	Summary      FindingMetricBucket    `json:"summary"`
-	Trend        []FindingMetricTrend   `json:"trend"`
-	Durations    []FindingDuration      `json:"durations"`
-	Distribution []*FindingMetricBucket `json:"distribution"`
-	Overdue      []FindingOverdue       `json:"overdue"`
-	SLA          FindingSLA             `json:"sla"`
+	AttributionVersion int                    `json:"attribution_version,omitempty"`
+	SnapshotIDs        []int64                `json:"snapshot_ids,omitempty"`
+	DataQuality        FindingMetricsQuality  `json:"data_quality"`
+	FilterOptions      FindingMetricOptions   `json:"filter_options"`
+	HasCustomSLA       bool                   `json:"has_custom_sla"`
+	Groups             []FindingMetricGroup   `json:"groups"`
+	GeneratedAt        *time.Time             `json:"generated_at"`
+	HistorySince       *time.Time             `json:"history_since"`
+	StockKnown         bool                   `json:"stock_known"`
+	QualityKnown       bool                   `json:"quality_known"`
+	Summary            FindingMetricBucket    `json:"summary"`
+	Trend              []FindingMetricTrend   `json:"trend"`
+	Durations          []FindingDuration      `json:"durations"`
+	Distribution       []*FindingMetricBucket `json:"distribution"`
+	Overdue            []FindingOverdue       `json:"overdue"`
+	SLA                FindingSLA             `json:"sla"`
+}
+
+type FindingMetricsQuality struct {
+	UnknownAttribution  int `json:"unknown_attribution"`
+	UnknownEvents       int `json:"unknown_events"`
+	UnknownOpen         int `json:"unknown_open"`
+	MissingSLA          int `json:"missing_sla"`
+	MissingDiscovery    int `json:"missing_discovery"`
+	MissingSnapshotDays int `json:"missing_snapshot_days"`
+}
+type FindingMetricOptions struct {
+	BusinessLineIDs []int64 `json:"business_line_ids"`
+	OwnerIDs        []int64 `json:"owner_ids"`
 }
 
 type findingMetricState struct {

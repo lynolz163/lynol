@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"mime"
 	"net"
+	"net/mail"
 	"net/smtp"
 	"strconv"
 	"strings"
@@ -52,6 +53,12 @@ func (emailChannel) Validate(cfg map[string]any) error {
 	if len(cfgStrings(cfg, "to")) == 0 {
 		return errors.New("至少需要一个收件人地址")
 	}
+	for _, email := range cfgStrings(cfg, "cc") {
+		address, err := mail.ParseAddress(email)
+		if err != nil || address.Address != email || strings.ContainsAny(email, "\r\n") {
+			return errors.New("抄送地址须为完整邮箱，例如 name@example.com")
+		}
+	}
 	return nil
 }
 
@@ -63,11 +70,23 @@ func (c emailChannel) Send(ctx context.Context, cfg map[string]any, m Message) (
 	port := cfgInt(cfg, "port")
 	from := cfgString(cfg, "from")
 	to := cfgStrings(cfg, "to")
+	cc := []string{}
+	seen := map[string]bool{}
+	for _, email := range to {
+		seen[strings.ToLower(email)] = true
+	}
+	for _, email := range cfgStrings(cfg, "cc") {
+		key := strings.ToLower(email)
+		if !seen[key] {
+			seen[key] = true
+			cc = append(cc, email)
+		}
+	}
 	username := cfgString(cfg, "username")
 	password := cfgString(cfg, "password")
 	implicitTLS := cfgBool(cfg, "tls")
 
-	msg, err := buildEmailMessage(from, to, m)
+	msg, err := buildEmailMessage(from, to, cc, m)
 	if err != nil {
 		return 0, Permanent(err)
 	}
@@ -101,7 +120,7 @@ func (c emailChannel) Send(ctx context.Context, cfg map[string]any, m Message) (
 	if err := client.Mail(from); err != nil {
 		return 0, smtpStageError(fmt.Sprintf("发件人 %s 被拒", from), err)
 	}
-	for _, rcpt := range to {
+	for _, rcpt := range append(to, cc...) {
 		if err := client.Rcpt(rcpt); err != nil {
 			return 0, smtpStageError(fmt.Sprintf("收件人 %s 被拒", rcpt), err)
 		}
@@ -193,10 +212,13 @@ func smtpReplyCode(text string) int {
 // 正文用 base64 编码有两个原因：一是 SMTP 规定单行不超过 1000 字节，而 HTML
 // 正文（尤其汇总邮件）很容易出现超长行；二是 base64 天然不会出现以 "." 开头
 // 的行，省去 SMTP 点号转义的麻烦。
-func buildEmailMessage(from string, to []string, m Message) (string, error) {
+func buildEmailMessage(from string, to, cc []string, m Message) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "From: %s\r\n", from)
 	fmt.Fprintf(&b, "To: %s\r\n", strings.Join(to, ", "))
+	if len(cc) > 0 {
+		fmt.Fprintf(&b, "Cc: %s\r\n", strings.Join(cc, ", "))
+	}
 	// 中文主题必须做 RFC 2047 编码，否则会被客户端显示成乱码。
 	fmt.Fprintf(&b, "Subject: %s\r\n", mime.QEncoding.Encode("utf-8", htmlTitle(m)))
 	b.WriteString("MIME-Version: 1.0\r\n")
