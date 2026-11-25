@@ -911,7 +911,7 @@ export default function RemediationPage() {
           </div>
         </header>
         <a href="/settings/org" className="ml-auto text-muted-foreground text-xs hover:underline">
-          配置部门与负责人 ↗
+          部门与归属配置 ↗
         </a>
         <Tabs value={section} onValueChange={setSection}>
           <TabsList>

@@ -732,7 +732,7 @@ export default function OrgPage() {
             <Building2 className="size-5" />
           </span>
           <div>
-            <h1 className="font-semibold text-xl tracking-tight sm:text-2xl">部门与业务线</h1>
+            <h1 className="font-semibold text-xl tracking-tight sm:text-2xl">部门与归属</h1>
             <p className="mt-0.5 text-muted-foreground text-xs">组织与责任配置</p>
           </div>
         </div>

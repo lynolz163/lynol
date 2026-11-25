@@ -1,4 +1,3 @@
-import type { BusinessLine, ResponsibilityDirectory, ResponsibilityParty, ResponsibilitySave, ResponsibilityRuleResult } from "@/lib/responsibility";
 // Real backend client. /api/* is proxied to the Go backend (next.config rewrites).
 // Returns the domain types in lib/types.ts. Shapes match the backend handlers;
 // a few fields the backend serializes differently (e.g. created_at as a unix int)
@@ -244,11 +243,6 @@ function interceptPageQuery(page: number, size: number, filter: InterceptApprova
 }
 
 export const api = {
-  responsibilityDirectory: () => get<ResponsibilityDirectory>("/exploration/responsibility"),
-  saveBusinessLine: (line: BusinessLine) => put<ResponsibilitySave<BusinessLine>>("/exploration/responsibility/business-lines", line),
-  saveResponsibilityParty: (party: ResponsibilityParty) => put<ResponsibilitySave<{party: ResponsibilityParty;transferred:number}>>("/exploration/responsibility/parties", party),
-  saveResponsibilityFallback: (id: number) => put<ResponsibilitySave<{id:number}>>("/exploration/responsibility/fallback", {id}),
-  applyResponsibilityRules: () => put<ResponsibilitySave<ResponsibilityRuleResult>>("/exploration/responsibility/apply-rules", {}),
   // 后端应用版本号（release 时由 ldflags 注入，默认 "dev"）。
   health: () => get<{ ok: boolean; service: string; version: string }>("/health"),
 
@@ -568,11 +562,6 @@ export const api = {
     return get<FindingMetricsReport>(`/exploration/findings/metrics?${params}`);
   },
   findingResponsibilityOptions: () => get<FindingResponsibilityOptions>("/exploration/findings/responsibility-options"),
-  setFindingResponsibility: (finding_ids: string[], business_line: string, assignee: string) =>
-    http<{ updated: string[] }>("/exploration/findings/responsibility", {
-      method: "PUT",
-      body: JSON.stringify({ finding_ids, business_line, assignee }),
-    }),
   findingReportSchedules: () => get<{ items: FindingReportSchedule[] }>("/exploration/finding-report-schedules"),
   saveFindingReportSchedule: (value: FindingReportSchedule) =>
     http<FindingReportSchedule>("/exploration/finding-report-schedules", {
