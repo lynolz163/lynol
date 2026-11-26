@@ -66,6 +66,12 @@ function FindingDetailInner() {
   const searchParams = useSearchParams();
   const id = searchParams.get("id") ?? "";
   const contextTaskId = searchParams.get("context_task") ?? "";
+  const returnTaskId = searchParams.get("from_task") || contextTaskId;
+  const returnTab = searchParams.get("from_tab") === "retests" ? "retests" : "findings";
+  const backHref = returnTaskId
+    ? `/function/tasks/detail?${new URLSearchParams({ id: returnTaskId, tab: returnTab })}`
+    : "/function/findings";
+  const backLabel = returnTaskId ? `返回任务${returnTab === "retests" ? "复测" : "发现"}` : "返回发现列表";
   const [finding, setFinding] = React.useState<Finding | null>(null);
   const [loaded, setLoaded] = React.useState(false);
   const [tab, setTab] = React.useState("overview");
@@ -128,8 +134,8 @@ function FindingDetailInner() {
         <p className="text-muted-foreground">{loaded ? `未找到发现 ${id}` : "加载中…"}</p>
         {loaded && (
           <Button asChild variant="outline">
-            <Link href="/function/findings">
-              <ArrowLeftIcon /> 返回发现列表
+            <Link href={backHref} replace>
+              <ArrowLeftIcon /> {backLabel}
             </Link>
           </Button>
         )}
@@ -173,7 +179,7 @@ function FindingDetailInner() {
         <div className="flex flex-wrap items-center gap-2">
           <SidebarTrigger className="-ml-1" />
           <Button asChild variant="ghost" size="icon" className="size-7">
-            <Link href="/function/findings">
+            <Link href={backHref} replace aria-label={backLabel} title={backLabel}>
               <ArrowLeftIcon />
             </Link>
           </Button>

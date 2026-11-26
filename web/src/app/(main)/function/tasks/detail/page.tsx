@@ -209,7 +209,13 @@ function TaskDetailInner() {
   const [task, setTask] = React.useState<Task | null>(null);
   const [paused, setPaused] = React.useState(false);
   const [loaded, setLoaded] = React.useState(false);
-  const [tab, setTab] = React.useState("sessions");
+  const requestedTab = searchParams.get("tab") ?? "sessions";
+  const tab = TABS.some((item) => item.value === requestedTab) ? requestedTab : "sessions";
+  function setTab(value: string) {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("tab", value);
+    router.replace(`/function/tasks/detail?${params}`, { scroll: false });
+  }
   const [interceptPendingCount, setInterceptPendingCount] = React.useState(0);
   const [profiles, setProfiles] = React.useState<LLMProfile[]>([]);
   const [archiving, setArchiving] = React.useState(false);

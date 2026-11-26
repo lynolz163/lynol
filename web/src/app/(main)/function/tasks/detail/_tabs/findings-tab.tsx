@@ -114,9 +114,8 @@ function Row({
         {f.finding_id && (
           <Link
             href={
-              f.inherited
-                ? `/function/findings/detail?id=${f.finding_id}&context_task=${contextTaskId}`
-                : `/function/findings/detail?id=${f.finding_id}`
+              `/function/findings/detail?id=${encodeURIComponent(f.finding_id)}&from_task=${encodeURIComponent(contextTaskId)}&from_tab=findings` +
+              (f.inherited ? `&context_task=${encodeURIComponent(contextTaskId)}` : "")
             }
             className="text-muted-foreground hover:text-primary inline-flex shrink-0 items-center gap-0.5 text-xs"
             title="查看漏洞详情"
