@@ -93,6 +93,7 @@ import type {
   TaskGoal,
   TaskLLMResolutions,
   TaskNode,
+  TaskReportExportOptions,
   TaskScopeRow,
   TaskTemplate,
   TokenTotal,
@@ -925,6 +926,34 @@ export const api = {
     ).then((r) => ({ ...r, deliveries: arr(r.deliveries) }));
   },
   notifyRetryDelivery: (id: number) => post<{ ok: boolean }>(`/notify/deliveries/${id}/retry`),
+  exportTaskReport: async (taskId: string, options: TaskReportExportOptions) => {
+    if (MOCK && process.env.NEXT_PUBLIC_GOVERNANCE_REAL_API !== "1") {
+      throw new Error("当前示例环境不支持模板导出，请连接真实预览或正式服务。");
+    }
+    const token = getToken();
+    const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/report/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(options),
+      signal: AbortSignal.timeout(120_000),
+    });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as { error?: unknown } | null;
+      throw new Error(typeof payload?.error === "string" ? payload.error : `报告导出失败（${response.status}）`);
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get("Content-Disposition") ?? "";
+    const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    const filename = encodedName ? decodeURIComponent(encodedName) : disposition.match(/filename="([^"]+)"/i)?.[1];
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename ?? `task-${taskId}-report.${options.template === "haixing-html" ? "html" : "docx"}`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
   report: async (task?: string) => {
     if (MOCK) return mockReport(task);
     const token = getToken();

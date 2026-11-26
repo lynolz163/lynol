@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{.Title}}</title>
+  <style>
+    :root{--ink:#172033;--muted:#667085;--line:#d9dee8;--navy:#173f67;--critical:#7a271a;--high:#b42318;--medium:#9a6700;--low:#175cd3;--info:#475467}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;color:var(--ink);background:#eef2f6;font:16px/1.72 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",Arial,sans-serif}
+    a{color:#175cd3;text-decoration:none}a:hover{text-decoration:underline}a:focus-visible,summary:focus-visible{outline:3px solid #80bfff;outline-offset:4px}code,pre{font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace}
+    .hero{background:linear-gradient(135deg,#102d4a,#1f5a8f);color:white;padding:72px 24px 64px}.hero-inner,.container{max-width:1120px;margin:auto}.eyebrow{font-size:14px;letter-spacing:.14em;opacity:.78}h1{margin:14px 0 8px;font-size:42px;line-height:1.2;overflow-wrap:anywhere}.subtitle{font-size:20px;opacity:.9}.date{margin-top:22px;opacity:.85}.credits{display:flex;flex-wrap:wrap;gap:6px 24px;margin-top:8px;font-size:14px;opacity:.85}
+    .container{padding:36px 22px 80px}.panel,.finding{background:white;border:1px solid var(--line);border-radius:14px;box-shadow:0 8px 28px rgba(16,24,40,.06);padding:28px;margin-bottom:24px}
+    .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:14px;margin:22px 0}.stat{background:white;border:1px solid var(--line);border-top:4px solid var(--navy);border-radius:12px;padding:20px}.stat strong{display:block;font-size:30px;line-height:1.1}.stat span{color:var(--muted)}.stat.critical{border-top-color:var(--critical)}.stat.high{border-top-color:var(--high)}.stat.medium{border-top-color:#d9a400}.stat.low{border-top-color:var(--low)}.stat.info,.stat.unknown{border-top-color:var(--info)}
+    h2{font-size:26px;line-height:1.35;margin:0 0 12px;overflow-wrap:anywhere}h3{font-size:18px;margin:26px 0 8px}h4,h5,h6{margin:18px 0 8px}p{margin:8px 0 14px}ul,ol{padding-left:1.45em}li{margin:7px 0}.muted{color:var(--muted)}.task-description{white-space:pre-wrap;overflow-wrap:anywhere}.empty{padding:20px 0;color:var(--muted)}
+    .table-wrap{width:100%;overflow-x:auto}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top;overflow-wrap:anywhere}th{background:var(--navy);color:white}.index-table{min-width:760px}.index-table th:first-child,.index-table th:nth-child(2),.index-table td:first-child,.index-table td:nth-child(2){text-align:center;white-space:nowrap}.index-table th:first-child,.index-table td:first-child{width:64px}.index-table th:nth-child(2),.index-table td:nth-child(2){width:80px}
+    .badge{display:inline-block;border-radius:999px;padding:2px 10px;font-weight:700;font-size:13px}.badge.critical{color:#7a271a;background:#fee4e2}.badge.high{color:var(--high);background:#fce8e6}.badge.medium{color:var(--medium);background:#fff4ce}.badge.low{color:var(--low);background:#e8f1fb}.badge.info,.badge.unknown{color:var(--info);background:#f2f4f7}
+    .finding{scroll-margin-top:18px;border-left-width:6px}.finding.critical{border-left-color:var(--critical)}.finding.high{border-left-color:var(--high)}.finding.medium{border-left-color:#d9a400}.finding.low{border-left-color:var(--low)}.finding.info,.finding.unknown{border-left-color:var(--info)}.finding-title{display:flex;gap:16px;align-items:flex-start}.finding-title>div{min-width:0}.number{display:grid;place-items:center;flex:0 0 48px;width:48px;min-height:48px;padding:4px;border-radius:12px;background:#edf2f7;color:var(--navy);font-weight:800}.finding-info{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;font-size:13px;color:var(--muted)}
+    .meta{display:grid;grid-template-columns:1fr 2fr;margin:22px 0;border:1px solid var(--line);border-radius:10px;overflow:hidden}.meta>div{padding:12px 14px;min-width:0}.meta>div+div{border-left:1px solid var(--line)}dt{font-size:13px;color:var(--muted);font-weight:700}dd{margin:4px 0 0;overflow-wrap:anywhere}dd code{white-space:normal}.meta ul{margin:0;padding-left:1.2em}
+    details{margin:18px 0}summary{cursor:pointer;font-weight:800;font-size:18px;margin-bottom:10px}pre{margin:12px 0;background:#101828;color:#e7edf5;border-radius:10px;padding:18px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.55}pre code{white-space:inherit}.report-content{overflow-wrap:anywhere}.report-content table{display:block;max-width:100%;overflow-x:auto}.report-content blockquote{margin:16px 0;padding:4px 16px;border-left:4px solid var(--line);color:var(--muted)}.back{display:inline-block;margin-top:14px;font-size:14px}.footer{color:var(--muted);font-size:12px;text-align:center}
+    @media(max-width:760px){.hero{padding:44px 22px}h1{font-size:32px}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.panel,.finding{padding:20px}.container{padding:24px 14px 48px}.meta{grid-template-columns:1fr}.meta>div+div{border-left:0;border-top:1px solid var(--line)}.finding-title{gap:10px}.finding h2{font-size:22px}}
+    @media print{body{background:white;font-size:11pt}.hero{background:white;color:black;padding:24px 0}.container{padding:0}.panel,.finding{box-shadow:none;border-radius:0}.finding{break-before:page;break-inside:auto}.finding-title,h2,h3,summary{break-after:avoid}.meta,.stats{break-inside:avoid}.back{display:none}.index-table{min-width:0}.table-wrap,.report-content table{overflow:visible}.report-content table{display:table;table-layout:fixed}thead{display:table-header-group}tr{break-inside:avoid}details{display:block}details::details-content{content-visibility:visible;display:block;height:auto}summary{list-style:none}pre{background:#f4f4f4;color:black;border:1px solid #ddd;overflow:visible}a{color:black;text-decoration:none}.hero .date,.hero .credits{opacity:1}.footer{margin-top:24px}}
+  </style>
+</head>
+<body>
+<header class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow">SECURITY ASSESSMENT REPORT</div>
+    <h1>{{.Title}}</h1>
+    <div class="subtitle">渗透测试报告</div>
+    <div class="date">报告日期：{{.ReportDate}}</div>
+    {{if or .Organization .Author}}<div class="credits">{{if .Organization}}<span>编制单位：{{.Organization}}</span>{{end}}{{if .Author}}<span>编制人：{{.Author}}</span>{{end}}</div>{{end}}
+  </div>
+</header>
+<main class="container">
+  <section class="panel" aria-labelledby="summary-title">
+    <h2 id="summary-title">报告摘要</h2>
+    <p>本报告汇总“{{.TaskName}}”任务登记的 {{len .Findings}} 个漏洞。</p>
+    {{if .TaskDescription}}<p class="task-description">{{.TaskDescription}}</p>{{end}}
+    {{if or .StartedAt .CompletedAt}}<p class="muted">{{if .StartedAt}}任务开始：{{date .StartedAt}}{{end}}{{if .CompletedAt}} · 任务结束：{{date .CompletedAt}}{{end}}</p>{{end}}
+  </section>
+  <section class="stats" aria-label="风险分布">
+    <div class="stat"><strong>{{len .Findings}}</strong><span>漏洞总数</span></div>
+    {{range counts .Findings}}{{if or .Count (eq .Key "critical") (eq .Key "high") (eq .Key "medium") (eq .Key "low")}}<div class="stat {{.Key}}"><strong>{{.Count}}</strong><span>{{.Label}}</span></div>{{end}}{{end}}
+  </section>
+  <section class="panel" id="index" aria-labelledby="index-title">
+    <h2 id="index-title">漏洞目录</h2>
+    {{if .Findings}}
+    <div class="table-wrap" role="region" aria-label="漏洞目录表" tabindex="0">
+      <table class="index-table">
+        <thead><tr><th scope="col">编号</th><th scope="col">等级</th><th scope="col">漏洞名称</th><th scope="col">受影响资产</th></tr></thead>
+        <tbody>{{range $index, $finding := .Findings}}<tr>
+          <td><a href="#vuln-{{$finding.ID}}">{{add $index 1}}</a></td>
+          <td><span class="badge {{severityClass $finding.Severity}}">{{severity $finding.Severity}}</span></td>
+          <td><a href="#vuln-{{$finding.ID}}">{{findingTitle $finding}}</a></td>
+          <td>{{range $finding.Assets}}<div>{{asset .}}</div>{{else}}<span class="muted">未记录</span>{{end}}</td>
+        </tr>{{end}}</tbody>
+      </table>
+    </div>
+    {{else}}<p class="empty">本任务暂无登记漏洞。</p>{{end}}
+  </section>
+  {{range $index, $finding := .Findings}}
+  {{$content := content $finding}}
+  <section class="finding {{severityClass .Severity}}" id="vuln-{{.ID}}" aria-labelledby="title-{{.ID}}">
+    <div class="finding-title">
+      <span class="number">{{add $index 1}}</span>
+      <div>
+        <h2 id="title-{{.ID}}">{{findingTitle .}}</h2>
+        <div class="finding-info"><span class="badge {{severityClass .Severity}}">{{severity .Severity}}</span><span>漏洞 #{{.ID}}</span><span>{{status .Status}}</span>{{if .VulnClass}}<span>{{.VulnClass}}</span>{{end}}</div>
+      </div>
+    </div>
+    <dl class="meta">
+      <div><dt>受影响资产</dt><dd>{{range .Assets}}<div>{{asset .}}</div>{{else}}<span class="muted">未记录</span>{{end}}</dd></div>
+      <div><dt>接口位置</dt><dd>{{range .Traffic}}<div><code>{{.Method}} {{.URL}}</code></div>{{else}}<span class="muted">未记录</span>{{end}}</dd></div>
+    </dl>
+    <div class="report-content">
+      <h3>漏洞介绍</h3>
+      {{if $content.Description}}{{blocks $content.Description}}{{else}}<p class="muted">未记录</p>{{end}}
+      <h3>危害</h3>
+      {{if $content.Impact}}{{blocks $content.Impact}}{{else}}<p class="muted">未记录</p>{{end}}
+      <details open>
+        <summary>复现 POC</summary>
+        {{if $content.PoC}}{{blocks $content.PoC}}{{else}}<p class="muted">未记录</p>{{end}}
+      </details>
+      <h3>修复方法</h3>
+      {{if $content.Remediation}}{{blocks $content.Remediation}}{{else}}<p class="muted">未记录</p>{{end}}
+      {{if $content.Additional}}<h3>补充记录</h3>{{blocks $content.Additional}}{{end}}
+    </div>
+    <a class="back" href="#index">↑ 返回漏洞目录</a>
+  </section>
+  {{end}}
+  <footer class="footer">任务 #{{.TaskID}} · 导出于 {{date .GeneratedAt}}</footer>
+</main>
+</body>
+</html>

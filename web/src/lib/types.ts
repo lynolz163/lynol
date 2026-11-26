@@ -41,6 +41,17 @@ export interface Task {
   coverage_enabled?: boolean; // 资产覆盖度功能开关(创建时定,默认开)；false=不计算/不展示覆盖度
 }
 
+export type TaskReportTemplate = "haixing-html" | "ola-docx";
+
+export interface TaskReportExportOptions {
+  template: TaskReportTemplate;
+  include_excluded?: boolean;
+  title?: string;
+  organization?: string;
+  author?: string;
+  report_date?: string;
+}
+
 export interface TaskFindingDispatchPreview {
   task_id: string;
   task_name: string;
