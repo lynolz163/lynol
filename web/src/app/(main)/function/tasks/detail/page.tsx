@@ -445,7 +445,7 @@ function TaskDetailInner() {
           <InterceptTab taskId={id} />
         </TabsContent>
         <TabsContent value="report" className="mt-0">
-          <ReportTab taskId={id} />
+          <ReportTab task={task} onUpdated={load} />
         </TabsContent>
       </div>
     </Tabs>

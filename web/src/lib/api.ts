@@ -88,6 +88,8 @@ import type {
   TaskAssetScopeMutation,
   TaskCategory,
   TaskConstraint,
+  TaskFindingDispatchPreview,
+  TaskFindingDispatchResult,
   TaskGoal,
   TaskLLMResolutions,
   TaskNode,
@@ -114,12 +116,14 @@ function getToken(): string | null {
 }
 
 export async function http<T>(path: string, init?: RequestInit): Promise<T> {
-  const realGovernance = process.env.NEXT_PUBLIC_GOVERNANCE_REAL_API === "1" && /^\/exploration\/(findings|finding-groups|finding-asset-tree|responsibility|responsibility-options|finding-reports|finding-report-schedules)([/?]|$)/.test(path);
+  const taskDispatch = /^\/tasks\/[^/]+\/findings\/dispatch(?:-preview)?$/.test(path);
+  const realGovernance = process.env.NEXT_PUBLIC_GOVERNANCE_REAL_API === "1" && (taskDispatch || /^\/exploration\/(findings|finding-groups|finding-asset-tree|responsibility|responsibility-options|finding-reports|finding-report-schedules)([/?]|$)/.test(path));
+  if (MOCK && taskDispatch && !realGovernance) throw new Error("当前示例环境不支持记录任务下发时间，请连接真实预览或正式服务。");
   if (MOCK && !realGovernance) return mockHandle<T>(init?.method ?? "GET", path, init?.body ?? null);
   const token = getToken();
   const r = await fetch(`/api${path}`, {
     ...init,
-    signal: init?.signal ?? (realGovernance ? AbortSignal.timeout(30_000) : undefined),
+    signal: init?.signal ?? (realGovernance || taskDispatch ? AbortSignal.timeout(30_000) : undefined),
     headers: {
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -257,6 +261,14 @@ export const api = {
   tasks: () =>
     get<{ tasks: Task[]; active: string }>("/tasks").then((r) => ({ tasks: arr(r.tasks), active: r.active ?? "" })),
   task: (id: string) => get<Task>(`/tasks/${encodeURIComponent(id)}`),
+  previewTaskFindingDispatch: (id: string, recordedAt?: string) =>
+    post<TaskFindingDispatchPreview>(`/tasks/${encodeURIComponent(id)}/findings/dispatch-preview`, {
+      recorded_at: recordedAt,
+    }),
+  recordTaskFindingDispatch: (id: string, recordedAt?: string) =>
+    post<TaskFindingDispatchResult>(`/tasks/${encodeURIComponent(id)}/findings/dispatch`, {
+      recorded_at: recordedAt,
+    }),
   createTask: (input: {
     name?: string;
     categoryId?: number;

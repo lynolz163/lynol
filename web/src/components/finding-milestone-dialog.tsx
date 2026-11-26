@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useEffect, useId, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useId, useState } from "react";
 
 import { toast } from "sonner";
 
@@ -24,12 +24,20 @@ export function FindingMilestoneDialog({
   onOpenChange,
   title,
   description,
+  children,
+  confirmLabel = "确认记录",
+  disabled = false,
+  onRecordedAtChange,
   onSave,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
   description: string;
+  children?: ReactNode;
+  confirmLabel?: string;
+  disabled?: boolean;
+  onRecordedAtChange?: (recordedAt?: string) => void;
   onSave: (recordedAt?: string) => Promise<void>;
 }) {
   const [value, setValue] = useState("");
@@ -45,6 +53,7 @@ export function FindingMilestoneDialog({
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (saving || disabled) return;
     setSaving(true);
     try {
       await onSave(useCurrentTime ? undefined : new Date(`${value}+08:00`).toISOString());
@@ -57,13 +66,14 @@ export function FindingMilestoneDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(next) => !saving && onOpenChange(next)}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         <form onSubmit={save} className="space-y-4">
+          {children}
           <div className="space-y-2">
             <label htmlFor={inputID} className="font-medium text-sm">
               记录时间（北京时间）
@@ -76,18 +86,23 @@ export function FindingMilestoneDialog({
                 required
                 max={currentBeijingTime()}
                 value={value}
+                disabled={saving}
                 onChange={(event) => {
                   setValue(event.target.value);
                   setUseCurrentTime(false);
+                  const date = new Date(`${event.target.value}+08:00`);
+                  onRecordedAtChange?.(Number.isFinite(date.getTime()) ? date.toISOString() : undefined);
                 }}
                 className="min-w-56 flex-1"
               />
               <Button
                 type="button"
                 variant="outline"
+                disabled={saving}
                 onClick={() => {
                   setValue(currentBeijingTime());
                   setUseCurrentTime(true);
+                  onRecordedAtChange?.(undefined);
                 }}
               >
                 使用当前时间
@@ -103,8 +118,8 @@ export function FindingMilestoneDialog({
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
               取消
             </Button>
-            <Button type="submit" disabled={saving}>
-              {saving ? "保存中…" : "确认记录"}
+            <Button type="submit" disabled={saving || disabled}>
+              {saving ? "保存中…" : confirmLabel}
             </Button>
           </DialogFooter>
         </form>

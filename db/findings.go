@@ -771,11 +771,7 @@ func (d *DB) RecordFindingMilestoneBatch(ctx context.Context, ids []int64, miles
 		}
 		chosenAt = *recordedAt
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT f.id,f.created_at,f.dispatched_at,f.developer_fixed_at,
-		COALESCE((SELECT max(h.occurred_at) FROM finding_history h WHERE h.finding_id=f.id AND (
-		  (h.kind='status_changed' AND h.old_status IN ('fixed','resolved') AND h.new_status NOT IN ('fixed','resolved'))
-		  OR (h.kind='retest_completed' AND h.metadata->>'status'='completed' AND h.metadata->>'verdict'='reproduced')
-		)),f.created_at) FROM findings f
+	rows, err := tx.QueryContext(ctx, `SELECT f.id,f.created_at,f.dispatched_at,f.developer_fixed_at,`+findingRemediationCycleSQL+` FROM findings f
 		WHERE f.id=ANY($1::bigint[]) AND (`+column+` IS NULL OR `+
 		fmt.Sprintf(findingNewAttempt, "f."+column)+`)`, ids)
 	if err != nil {
@@ -790,16 +786,9 @@ func (d *DB) RecordFindingMilestoneBatch(ctx context.Context, ids []int64, miles
 			rows.Close()
 			return nil, err
 		}
-		invalid := chosenAt.Before(discovered) || chosenAt.Before(cycle)
-		if milestone == "developer_fixed" && dispatched != nil && !dispatched.Before(cycle) {
-			invalid = invalid || chosenAt.Before(*dispatched)
-		}
-		if milestone == "dispatched" && fixed != nil && !fixed.Before(cycle) {
-			invalid = invalid || chosenAt.After(*fixed)
-		}
-		if invalid {
+		if err := validateFindingMilestoneTime(id, milestone, chosenAt, discovered, cycle, dispatched, fixed); err != nil {
 			rows.Close()
-			return nil, fmt.Errorf("%w：漏洞 #%d 的时间不能早于发现或本轮重开，下发时间不能晚于本轮开发反馈修复时间", ErrInvalidFindingMilestoneTime, id)
+			return nil, err
 		}
 		eligible = append(eligible, id)
 	}
@@ -808,7 +797,36 @@ func (d *DB) RecordFindingMilestoneBatch(ctx context.Context, ids []int64, miles
 		return nil, err
 	}
 	rows.Close()
-	rows, err = tx.QueryContext(ctx, `UPDATE findings SET `+column+`=$2 WHERE id=ANY($1::bigint[]) RETURNING id, `+column, eligible, chosenAt)
+	recorded, err := writeFindingMilestonesTx(ctx, tx, eligible, column, chosenAt)
+	if err != nil {
+		return nil, err
+	}
+	return recorded, tx.Commit()
+}
+
+const findingRemediationCycleSQL = `COALESCE((SELECT max(h.occurred_at) FROM finding_history h WHERE h.finding_id=f.id AND (
+  (h.kind='status_changed' AND h.old_status IN ('fixed','resolved') AND h.new_status NOT IN ('fixed','resolved'))
+  OR (h.kind='retest_completed' AND h.metadata->>'status'='completed' AND h.metadata->>'verdict'='reproduced')
+)),f.created_at)`
+
+func validateFindingMilestoneTime(id int64, milestone string, chosenAt, discovered, cycle time.Time, dispatched, fixed *time.Time) error {
+	invalid := chosenAt.Before(discovered) || chosenAt.Before(cycle)
+	if milestone == "developer_fixed" && dispatched != nil && !dispatched.Before(cycle) {
+		invalid = invalid || chosenAt.Before(*dispatched)
+	}
+	if milestone == "dispatched" && fixed != nil && !fixed.Before(cycle) {
+		invalid = invalid || chosenAt.After(*fixed)
+	}
+	if invalid {
+		return fmt.Errorf("%w：漏洞 #%d 的时间不能早于发现或本轮重开，下发时间不能晚于本轮开发反馈修复时间", ErrInvalidFindingMilestoneTime, id)
+	}
+	return nil
+}
+
+// Both individual and task-wide recording use the existing field-change journal
+// trigger. The caller selects eligible findings and validates the chosen time.
+func writeFindingMilestonesTx(ctx context.Context, tx *sql.Tx, ids []int64, column string, chosenAt time.Time) (map[string]time.Time, error) {
+	rows, err := tx.QueryContext(ctx, `UPDATE findings SET `+column+`=$2 WHERE id=ANY($1::bigint[]) RETURNING id, `+column, ids, chosenAt)
 	if err != nil {
 		return nil, err
 	}
@@ -826,7 +844,7 @@ func (d *DB) RecordFindingMilestoneBatch(ctx context.Context, ids []int64, miles
 		return nil, err
 	}
 	rows.Close()
-	return recorded, tx.Commit()
+	return recorded, nil
 }
 
 // DeleteFinding removes a finding entirely: the standalone findings row and its

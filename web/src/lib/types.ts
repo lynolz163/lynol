@@ -41,6 +41,29 @@ export interface Task {
   coverage_enabled?: boolean; // 资产覆盖度功能开关(创建时定,默认开)；false=不计算/不展示覆盖度
 }
 
+export interface TaskFindingDispatchPreview {
+  task_id: string;
+  task_name: string;
+  task_status: string;
+  total: number;
+  eligible: number;
+  already_dispatched: number;
+  skipped_status: number;
+  invalid_time: number;
+  can_dispatch: boolean;
+  reason?: string;
+  severity_counts: { critical: number; high: number; medium: number; low: number };
+}
+
+export interface TaskFindingDispatchResult {
+  task_id: string;
+  recorded: number;
+  skipped: number;
+  already_dispatched: number;
+  skipped_status: number;
+  recorded_at: string | null;
+}
+
 export interface TaskCategory {
   id: number;
   name: string;
