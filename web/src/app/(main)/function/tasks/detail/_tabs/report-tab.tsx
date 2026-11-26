@@ -6,7 +6,6 @@ import { CheckIcon, CopyIcon, FileTextIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { Markdown } from "@/components/markdown";
-import { TaskFindingDispatch } from "@/components/task-finding-dispatch";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { api } from "@/lib/api";
@@ -15,7 +14,7 @@ import { copyText } from "@/lib/utils";
 
 import { TaskReportExport } from "./task-report-export";
 
-export function ReportTab({ task, onUpdated }: { task: Task; onUpdated: () => void }) {
+export function ReportTab({ task }: { task: Task }) {
   const taskId = task.id;
   const [report, setReport] = React.useState<string>("");
   const [loading, setLoading] = React.useState(true);
@@ -82,7 +81,6 @@ export function ReportTab({ task, onUpdated }: { task: Task; onUpdated: () => vo
           <FileTextIcon className="size-4" /> 渗透测试报告
         </CardTitle>
         <div className="flex flex-wrap gap-2">
-          <TaskFindingDispatch task={task} onUpdated={onUpdated} />
           <TaskReportExport key={taskId} task={task} />
           {report && (
             <Button size="sm" variant="outline" onClick={copy}>

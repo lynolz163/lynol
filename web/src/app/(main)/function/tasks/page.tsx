@@ -47,7 +47,6 @@ import { toast } from "sonner";
 import { AssetInterceptRulesEditor } from "@/components/asset-intercept-rules-editor";
 import { StatusBadge } from "@/components/status-badge";
 import { TablePagination } from "@/components/table-pagination";
-import { TaskFindingDispatch } from "@/components/task-finding-dispatch";
 import { TaskLLMProfileChain } from "@/components/task-llm-profile-chain";
 import { TaskTemplateControls } from "@/components/task-template-controls";
 import {
@@ -990,7 +989,6 @@ export default function TasksPage() {
                       onRename={renameTask}
                       onTogglePinned={toggleTaskPinned}
                       onArchive={queueTaskArchive}
-                      onDispatched={load}
                       selected={selectedIds.has(task.id)}
                       onSelectedChange={toggleSelected}
                     />
@@ -1166,7 +1164,6 @@ const TaskRow = React.memo(function TaskRow({
   onRename,
   onTogglePinned,
   onArchive,
-  onDispatched,
   selected,
   onSelectedChange,
 }: {
@@ -1177,7 +1174,6 @@ const TaskRow = React.memo(function TaskRow({
   onRename: (task: Task, name: string) => Promise<void>;
   onTogglePinned: (task: Task) => Promise<void>;
   onArchive: (task: Task) => Promise<void>;
-  onDispatched: () => void;
   selected: boolean;
   onSelectedChange: (id: string, checked: boolean) => void;
 }) {
@@ -1284,7 +1280,6 @@ const TaskRow = React.memo(function TaskRow({
       </TableCell>
       <TableCell className="sticky right-0 z-10 bg-card text-right shadow-[-1px_0_0_0_hsl(var(--border))] group-hover:bg-muted/50">
         <div className="flex items-center justify-end gap-0.5">
-          {task.status === "done" && <TaskFindingDispatch task={task} onUpdated={onDispatched} label="记录下发" />}
           <Button size="icon" variant="ghost" asChild aria-label="查看任务详情" title="查看任务详情">
             <Link href={`/function/tasks/detail?id=${encodeURIComponent(task.id)}`}>
               <EyeIcon />

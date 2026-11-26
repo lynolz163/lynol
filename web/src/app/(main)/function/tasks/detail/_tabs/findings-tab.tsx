@@ -8,13 +8,14 @@ import { ArrowDownIcon, ArrowUpIcon, ArrowUpRightIcon, ChevronRightIcon } from "
 import { toast } from "sonner";
 
 import { StatusBadge } from "@/components/status-badge";
+import { TaskFindingMilestone } from "@/components/task-finding-milestone";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { api } from "@/lib/api";
 import { useStoredSortPreference } from "@/lib/sort-preference";
 import { statusMeta } from "@/lib/status";
-import type { Finding, FindingStatus } from "@/lib/types";
+import type { Finding, FindingStatus, Task } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type FindingSortField = "time";
@@ -137,7 +138,8 @@ function Row({
   );
 }
 
-export function FindingsTab({ taskId }: { taskId: string }) {
+export function FindingsTab({ task, onUpdated }: { task: Task; onUpdated: () => void }) {
+  const taskId = task.id;
   const [findings, setFindings] = React.useState<Finding[]>([]);
   const [sortPreference, setSortPreference] = useStoredSortPreference(
     FINDING_SORT_PREFERENCE_KEY,
@@ -187,9 +189,29 @@ export function FindingsTab({ taskId }: { taskId: string }) {
       return b.id.localeCompare(a.id, undefined, { numeric: true });
     });
 
+  function refreshAfterMilestone() {
+    void api
+      .findings(taskId)
+      .then(setFindings)
+      .catch(() => toast.error("记录已保存，列表更新失败，请稍后重试。"));
+    onUpdated();
+  }
+
   return (
     <Card className="overflow-hidden py-0">
       <CardContent className="px-0">
+        <div className="border-b px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h3 className="font-medium text-sm">漏洞处置</h3>
+            <div className="flex flex-wrap gap-2">
+              <TaskFindingMilestone task={task} milestone="dispatch" onUpdated={refreshAfterMilestone} />
+              <TaskFindingMilestone task={task} milestone="developer_fixed" onUpdated={refreshAfterMilestone} />
+            </div>
+          </div>
+          {task.status !== "done" && (
+            <p className="mt-2 text-muted-foreground text-xs">任务完成后可批量记录下发和开发反馈修复时间。</p>
+          )}
+        </div>
         <div className="flex items-center border-b px-4 py-2 text-xs text-muted-foreground">
           <span className="min-w-0 flex-1">漏洞</span>
           <button

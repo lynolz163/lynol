@@ -75,6 +75,16 @@ export interface TaskFindingDispatchResult {
   recorded_at: string | null;
 }
 
+export interface TaskFindingDeveloperFixedPreview
+  extends Omit<TaskFindingDispatchPreview, "already_dispatched" | "can_dispatch"> {
+  already_recorded: number;
+  can_record: boolean;
+}
+
+export interface TaskFindingDeveloperFixedResult extends Omit<TaskFindingDispatchResult, "already_dispatched"> {
+  already_recorded: number;
+}
+
 export interface TaskCategory {
   id: number;
   name: string;

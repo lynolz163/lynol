@@ -430,7 +430,7 @@ function TaskDetailInner() {
           <BroadcastTab taskId={id} />
         </TabsContent>
         <TabsContent value="findings" className="mt-0">
-          <FindingsTab taskId={id} />
+          <FindingsTab task={task} onUpdated={load} />
         </TabsContent>
         <TabsContent value="retests" className="mt-0">
           <RetestsTab key={id} taskId={id} />
@@ -445,7 +445,7 @@ function TaskDetailInner() {
           <InterceptTab taskId={id} />
         </TabsContent>
         <TabsContent value="report" className="mt-0">
-          <ReportTab task={task} onUpdated={load} />
+          <ReportTab task={task} />
         </TabsContent>
       </div>
     </Tabs>

@@ -88,6 +88,8 @@ import type {
   TaskAssetScopeMutation,
   TaskCategory,
   TaskConstraint,
+  TaskFindingDeveloperFixedPreview,
+  TaskFindingDeveloperFixedResult,
   TaskFindingDispatchPreview,
   TaskFindingDispatchResult,
   TaskGoal,
@@ -117,14 +119,14 @@ function getToken(): string | null {
 }
 
 export async function http<T>(path: string, init?: RequestInit): Promise<T> {
-  const taskDispatch = /^\/tasks\/[^/]+\/findings\/dispatch(?:-preview)?$/.test(path);
-  const realGovernance = process.env.NEXT_PUBLIC_GOVERNANCE_REAL_API === "1" && (taskDispatch || /^\/exploration\/(findings|finding-groups|finding-asset-tree|responsibility|responsibility-options|finding-reports|finding-report-schedules)([/?]|$)/.test(path));
-  if (MOCK && taskDispatch && !realGovernance) throw new Error("当前示例环境不支持记录任务下发时间，请连接真实预览或正式服务。");
+  const taskMilestone = /^\/tasks\/[^/]+\/findings\/(?:dispatch|developer-fixed)(?:-preview)?$/.test(path);
+  const realGovernance = process.env.NEXT_PUBLIC_GOVERNANCE_REAL_API === "1" && (taskMilestone || /^\/exploration\/(findings|finding-groups|finding-asset-tree|responsibility|responsibility-options|finding-reports|finding-report-schedules)([/?]|$)/.test(path));
+  if (MOCK && taskMilestone && !realGovernance) throw new Error("当前示例环境不支持记录任务漏洞处置时间，请连接真实预览或正式服务。");
   if (MOCK && !realGovernance) return mockHandle<T>(init?.method ?? "GET", path, init?.body ?? null);
   const token = getToken();
   const r = await fetch(`/api${path}`, {
     ...init,
-    signal: init?.signal ?? (realGovernance || taskDispatch ? AbortSignal.timeout(30_000) : undefined),
+    signal: init?.signal ?? (realGovernance || taskMilestone ? AbortSignal.timeout(30_000) : undefined),
     headers: {
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -268,6 +270,14 @@ export const api = {
     }),
   recordTaskFindingDispatch: (id: string, recordedAt?: string) =>
     post<TaskFindingDispatchResult>(`/tasks/${encodeURIComponent(id)}/findings/dispatch`, {
+      recorded_at: recordedAt,
+    }),
+  previewTaskFindingDeveloperFixed: (id: string, recordedAt?: string) =>
+    post<TaskFindingDeveloperFixedPreview>(`/tasks/${encodeURIComponent(id)}/findings/developer-fixed-preview`, {
+      recorded_at: recordedAt,
+    }),
+  recordTaskFindingDeveloperFixed: (id: string, recordedAt?: string) =>
+    post<TaskFindingDeveloperFixedResult>(`/tasks/${encodeURIComponent(id)}/findings/developer-fixed`, {
       recorded_at: recordedAt,
     }),
   createTask: (input: {
